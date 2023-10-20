@@ -194,20 +194,20 @@ void voxelize_solid(const voxinfo& v, float* triangle_data, unsigned int* vtable
 	}
 
 	cudaDeviceSynchronize();
-	cuda_error_check;
+	cuda_error_check; 
 
-	checkCudaErrors(cudaEventRecord(stop_vox, 0));
-	checkCudaErrors(cudaEventSynchronize(stop_vox));
-	checkCudaErrors(cudaEventElapsedTime(&elapsedTime, start_vox, stop_vox));
+	checkCudaErrors(cudaEventRecord(stop_vox, 0)); 
+	checkCudaErrors(cudaEventSynchronize(stop_vox));  
+	checkCudaErrors(cudaEventElapsedTime(&elapsedTime, start_vox, stop_vox)); 
 	printf("[Perf] Voxelization GPU time: %.1f ms\n", elapsedTime);
 
 	// If we're not using UNIFIED memory, copy the voxel table back and free all
 	if (useThrustPath){
 		fprintf(stdout, "[Voxel Grid] Copying %llu kB to page-locked HOST memory\n", size_t(vtable_size / 1024.0f));
-		checkCudaErrors(cudaMemcpy((void*)vtable, dev_vtable, vtable_size, cudaMemcpyDeviceToHost));
+		checkCudaErrors(cudaMemcpy((void*)vtable, dev_vtable, vtable_size, cudaMemcpyDeviceToHost)); 
 
 		fprintf(stdout, "[Voxel Grid] Freeing %llu kB of DEVICE memory\n", size_t(vtable_size / 1024.0f));
-		checkCudaErrors(cudaFree(dev_vtable));
+		checkCudaErrors(cudaFree(dev_vtable));  
 	}
 
 	// SANITY CHECKS
@@ -222,6 +222,6 @@ void voxelize_solid(const voxinfo& v, float* triangle_data, unsigned int* vtable
 #endif
 
 	// Destroy timers
-	checkCudaErrors(cudaEventDestroy(start_vox));
-	checkCudaErrors(cudaEventDestroy(stop_vox));
+	checkCudaErrors(cudaEventDestroy(start_vox)); 
+	checkCudaErrors(cudaEventDestroy(stop_vox));  
 }

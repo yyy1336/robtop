@@ -86,7 +86,7 @@ namespace gv {
 #ifdef __DEBUG_GVECTOR
 		std::cout << "vector " << _data << " deconstructing with size " << _size << std::endl;
 #endif
-		cuda_error_check;
+		cuda_error_check; 
 	}
 
 	//gVector::gVector(Scalar* host_ptr, size_t size) {

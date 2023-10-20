@@ -302,7 +302,7 @@ __global__ void restrict_stencil_nondyadic_OTFA_NS_kernel(int nv_coarse, double*
 
 	GraftArray<double, 27, 9> rxCoarse(rxcoarse_, nv_coarse);
 
-	__shared__ double KE[24][24];
+	__shared__ double KE[24][24]; 
 	__shared__ double W[4][4][4];
 	//__shared__ double coarseStencil[27][BlockSize / 32][32];
 
@@ -2408,7 +2408,7 @@ __global__ void filterSensitivity_kernel(int nebitword, gBitSAT<unsigned int> es
 	
 }
 
-void Grid::filterSensitivity(double radii)
+void Grid::filterSensitivity_origin(double radii)
 {
 	if (_layer != 0) return;
 	
@@ -2430,6 +2430,48 @@ void Grid::filterSensitivity(double radii)
 	init_array(_gbuf.g_sens, float{ 0 }, n_gselements);
 
 	filterSensitivity_kernel << <grid_size, block_size >> > (_gbuf.nword_ebits, esat, _ereso, g_sens_copy, _gbuf.g_sens, radii, fr, _gbuf.eidmap);
+
+	cudaDeviceSynchronize();
+
+	cuda_error_check;
+}
+
+void Grid::filterSensitivity(double radii)
+{
+	if (_layer != 0) return;
+	
+	size_t grid_size, block_size;
+
+	make_kernel_param(&grid_size, &block_size, _gbuf.nword_ebits, 512);
+
+	auto fr = [=] __device__(float r) {
+		float r2 = r * r;
+		return 1 - 6 * r2 + 8 * r2 * r - 3 * r2 *r2;
+	};
+
+	gBitSAT<unsigned int> esat(_gbuf.eActiveBits, _gbuf.eActiveChunkSum);
+
+	// float* g_sens_copy = (float*)getTempBuf(sizeof(float)* n_gselements * 4); //TODO_yyy
+	// cudaMemcpy(g_sens_copy, _gbuf.g_sens, sizeof(float) * n_gselements * 4, cudaMemcpyDeviceToDevice);
+	// init_array(_gbuf.g_sens, float{ 0 }, n_gselements * 4);
+	float* g_sens_copy = (float*)getTempBuf(sizeof(float)* n_gselements);
+	// printf("n_gselements = %d\n", n_gselements);
+
+	cudaMemcpy(g_sens_copy, _gbuf.g_sens, sizeof(float) * n_gselements, cudaMemcpyDeviceToDevice);
+	init_array(_gbuf.g_sens, float{ 0 }, n_gselements);
+	filterSensitivity_kernel << <grid_size, block_size >> > (_gbuf.nword_ebits, esat, _ereso, g_sens_copy, _gbuf.g_sens, radii, fr, _gbuf.eidmap);
+
+	cudaMemcpy(g_sens_copy, _gbuf.g_sens_C11, sizeof(float) * n_gselements, cudaMemcpyDeviceToDevice);
+	init_array(_gbuf.g_sens_C11, float{ 0 }, n_gselements);
+	filterSensitivity_kernel << <grid_size, block_size >> > (_gbuf.nword_ebits, esat, _ereso, g_sens_copy, _gbuf.g_sens_C11, radii, fr, _gbuf.eidmap);
+
+	cudaMemcpy(g_sens_copy, _gbuf.g_sens_C12, sizeof(float) * n_gselements, cudaMemcpyDeviceToDevice);
+	init_array(_gbuf.g_sens_C12, float{ 0 }, n_gselements);
+	filterSensitivity_kernel << <grid_size, block_size >> > (_gbuf.nword_ebits, esat, _ereso, g_sens_copy, _gbuf.g_sens_C12, radii, fr, _gbuf.eidmap);
+
+	cudaMemcpy(g_sens_copy, _gbuf.g_sens_C44, sizeof(float) * n_gselements, cudaMemcpyDeviceToDevice);
+	init_array(_gbuf.g_sens_C44, float{ 0 }, n_gselements);
+	filterSensitivity_kernel << <grid_size, block_size >> > (_gbuf.nword_ebits, esat, _ereso, g_sens_copy, _gbuf.g_sens_C44, radii, fr, _gbuf.eidmap);
 
 	cudaDeviceSynchronize();
 
@@ -3082,6 +3124,20 @@ void Grid::setV2V_g(int vreso, BitSAT<unsigned int>& vrtsat, int* v2v[27])
 void Grid::init_rho(double rh0)
 {
 	init_array(_gbuf.rho_e, float(rh0), n_rho());
+}
+
+//TODO_yyy
+void Grid::init_design_variable(double rh0, double C11_0, double C12_0, double C44_0)
+{
+	init_array(_gbuf.rho_e, float(rh0), n_rho());
+	printf("rho_e inited! \n");
+	init_array(_gbuf.C11_e, float(C11_0), n_rho());
+	printf("C11 inited\n");  //??????? CUDA error occured at line 374 in file /home/yyy/Projects/robtop/culib/lib.cuh, error type cudaErrorIllegalAddress 
+	                         //没有在grid.cpp的build函数里为Cxx_e分配内存
+	init_array(_gbuf.C12_e, float(C12_0), n_rho());
+	printf("C12 inited\n");
+	init_array(_gbuf.C44_e, float(C44_0), n_rho());
+	printf("C44 inited\n");
 }
 
 __global__ void computeNodePos_kernel(int n_word, int vreso, gBitSAT<unsigned int> vrtsat, devArray_t<double, 3> orig, double eh, devArray_t<double*, 3> pos) {

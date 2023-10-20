@@ -324,6 +324,7 @@ void TestSuit::testMain(const std::string& testname)
 		printf("\033[31mUnknown test\033[0m\n");
 		exit(-1);
 	}
+	printf("=   test finished!   =\n");
 
 	exit(0);
 }
@@ -1052,7 +1053,8 @@ void TestSuit::testDistributeForceOpt(void)
 	grids.writeSupportForce(grids.getPath("fs"));
 
 #if 1
-	initDensities(params.volume_ratio);
+	// initDensities(params.volume_ratio);
+	initDesignVaribles(params.volume_ratio);
 	float Vgoal = params.volume_ratio;
 #else
 	initDensities(1);
@@ -1070,6 +1072,14 @@ void TestSuit::testDistributeForceOpt(void)
 	std::vector<float> tmodipm;
 
 	double Md = 1, MdThres = 0.08;
+    
+	//
+    // MMA::mma_t mma(grids[0]->n_gselements, 1);
+	// mma.init(params.min_rho, 1);
+	// float volScale = 1e3;
+	// float sensScale = 1e5;
+	// gv::gVector dv(grids[0]->n_gselements, volScale / grids[0]->n_gselements);
+	// gv::gVector v(1, volScale*(1 - params.volume_ratio));
 
 
 	while (itn++ < 100) {
@@ -1077,8 +1087,10 @@ void TestSuit::testDistributeForceOpt(void)
 		Vgoal *= (1 - params.volume_decrease);
 		Vc = Vgoal - params.volume_ratio;
 		if (Vgoal < params.volume_ratio) Vgoal = params.volume_ratio;
+
+		// printf("-- c_before = %6.4e\n", grids[0]->compliance());
 		// update numeric stencil after density changed
-		update_stencil();
+		update_stencil();  //是否在此处计算有限元并更新了U？ 大概是吧。刚度矩阵K应该也在这儿跟更新吧，看来得大概。
 		// solve displacement 
 		//double c = grids.solveFEM();
 		double rel_res = 1;
@@ -1088,6 +1100,7 @@ void TestSuit::testDistributeForceOpt(void)
 		}
 		double c = grids[0]->compliance();
 		printf("-- c = %6.4e   r = %4.2lf%%  md = %4.2lf%%\n", c, rel_res * 100, Md * 100);
+		// std::cout << grids[0]->getDisplacement() << std::endl;
 		if (isnan(c) || abs(c) < 1e-11) { printf("\033[31m-- Error compliance\033[0m\n"); exit(-1); }
 		cRecord.emplace_back(c); volRecord.emplace_back(Vgoal);
 		if (stop_check.update(c, &Vc) && Vgoal <= params.volume_ratio && Md < MdThres) break;
@@ -1096,16 +1109,30 @@ void TestSuit::testDistributeForceOpt(void)
 		computeSensitivity();
 		// update density
 		updateDensities(Vgoal);
+		
+
+		// // compute volume
+		// double vol = grids[0]->volumeRatio();
+		// v[0] = volScale * (vol - params.volume_ratio);
+		// scaleVector(grids[0]->getSens(), grids[0]->n_gselements, sensScale);
+        
+		// printf("11111111111111\n");
+		// mma.update(grids[0]->getSens(), &dv.data(), v.data());
+		// printf("22222222222222222222\n");
+
 
 		Md = grids[0]->densityDiscretiness();
 	}
 
-	printf("\n=   finished   =\n");
+	printf("\n=   finished???   =\n");
 
 	// write result density field
-	grids.writeDensity(grids.getPath("out.vdb"));
+	// grids.writeDensity(grids.getPath("out.vdb"));
+	grids.writeDensity2txt(grids.getPath("out.txt"));
 
-	// write worst compliance record during optimization
+	printf("\n=   finished.   =\n");
+    
+	// write worst compliance record during optimization 
 	bio::write_vector(grids.getPath("c"), cRecord);
 
 	// write volume record during optimization
@@ -1686,10 +1713,12 @@ void TestSuit::test2011(void)
 
 		// solve C
 		aggregatedSystem(loadnodes, C);
+		printf("C solved!\n");
 
 		// solve largest eigenvector
 		Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig;
 		eig.compute((C + C.transpose()) / 2);
+		printf("largest eigenvector solved!\n");
 
 		printf("-- solving eigenvalues...\n");
 #if 1
@@ -1710,24 +1739,33 @@ void TestSuit::test2011(void)
 #endif
 
 		clist.emplace_back(c_worst);
+		printf("000000000\n");
 
 		// assemble worst force 
 		Eigen::Matrix<double, -1, 1> f_worst = assembleForce(loadnodes, w_worst.data());
+		printf("1111111111\n");
 
 		// solve worst displacement
 		setForce(f_worst);
 		Eigen::Matrix<double, -1, 1> uworst = solveFem();
+		printf("22222222222\n");
 
 		double fu = f_worst.dot(uworst);
+		printf("33333333333\n");
+		
 
 		// compute sensitivity
 		computeSensitivity();
+		printf("4444444444\n");
 
 		scaleVector(grids[0]->getSens(), grids[0]->n_gselements, sensScale);
+		printf("55555555555\n");
 
 		gpu_manager_t::pass_dev_buf_to_matlab("sens", grids[0]->getSens(), grids[0]->n_gselements);
+		printf("66666666666\n");
 
 		mma.update(grids[0]->getSens(), &dv.data(), v.data());
+		printf("777777777777\n");
 
 		// DEBUG
 		if (itn % 5 == 0) {

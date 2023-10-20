@@ -42,6 +42,7 @@ __device__ int gridPos2id(int x, int y, int z) {
 
 //  suppose Uworst, Fworst is prepared in U, F
 __global__ void computeSensitivity_kernel(int nv, float* rholist, double mu, float* sens) {
+	//nv: n_nodes
 	int tid = blockDim.x*blockIdx.x + threadIdx.x;
 
 	__shared__ double KE[24][24];
@@ -55,6 +56,7 @@ __global__ void computeSensitivity_kernel(int nv, float* rholist, double mu, flo
 	int vneigh[27];
 	for (int i = 0; i < 27; i++) {
 		vneigh[i] = gV2V[i][vid];
+		// printf("gV2V[%d][%d] = %d\n", i, vid, vneigh[i]);
 	}
 
 	// traverse incident elements of vertex
@@ -62,6 +64,7 @@ __global__ void computeSensitivity_kernel(int nv, float* rholist, double mu, flo
 		double partialSens = 0;
 
 		int eid = gV2E[i][vid];
+		// printf("gV2E[%d][%d] = %d\n", i, vid, eid);
 		if (eid == -1) continue;
 		double Ui[3] = { gU[0][vid],gU[1][vid],gU[2][vid] };
 		double penal = power_penalty[0] * powf(rholist[eid], power_penalty[0] - 1);
@@ -102,8 +105,89 @@ __global__ void computeSensitivity_kernel(int nv, float* rholist, double mu, flo
 #endif
 
 		atomicAdd(sens + eid, float(partialSens));
+		// TODO_yyy
+		// atomicAdd(sens + 4*eid, float(partialSens));
+		// atomicAdd(sens + 4*eid+1, float(partialSens));
+		// atomicAdd(sens + 4*eid+2, float(partialSens));
+		// atomicAdd(sens + 4*eid+3, float(partialSens));
+	}
+}
+
+
+//  suppose Uworst, Fworst is prepared in U, F
+__global__ void computeSensitivity_kernel_yyy(int nv, float* rholist, double mu, float* sens, float* sens_C11, float* sens_C12, float* sens_C44) {
+	//nv: n_nodes
+	int tid = blockDim.x*blockIdx.x + threadIdx.x;
+
+	__shared__ double KE[24][24];
+
+	loadTemplateMatrix(KE);
+
+	if (tid >= nv) return;
+
+	int vid = tid;
+
+	int vneigh[27];
+	for (int i = 0; i < 27; i++) {
+		vneigh[i] = gV2V[i][vid];
+		// printf("gV2V[%d][%d] = %d\n", i, vid, vneigh[i]);
 	}
 
+	// traverse incident elements of vertex
+	for (int i = 0; i < 8; i++) {
+		double partialSens = 0;
+
+		int eid = gV2E[i][vid];
+		// printf("gV2E[%d][%d] = %d\n", i, vid, eid);
+		if (eid == -1) continue;
+		double Ui[3] = { gU[0][vid],gU[1][vid],gU[2][vid] };
+		double penal = power_penalty[0] * powf(rholist[eid], power_penalty[0] - 1);
+
+		// compute partial node force (element i's contribution) K_\rho * Uworst on vi
+		double KrhoU[3] = { 0. };
+		// vertex self id in neihbor element i
+		int vi = 7 - i;
+		// vertex neighbor id in element i, traverse them and compute the corresponding node force on self
+		for (int vj = 0; vj < 8; vj++) {
+			int vjlid = gridPos2id<3>(i % 2 + vj % 2, i % 4 / 2 + vj % 4 / 2, i / 4 + vj / 4);
+			double Uj[3];
+			for (int k = 0; k < 3; k++) Uj[k] = gU[k][vneigh[vjlid]];
+			for (int krow = 0; krow < 3; krow++) {
+				for (int kcol = 0; kcol < 3; kcol++) {
+					KrhoU[krow] += KE[vi * 3 + krow][vj * 3 + kcol] * Uj[kcol];
+				}
+			}
+		}
+
+		for (int k = 0; k < 3; k++) KrhoU[k] *= penal;
+
+#if 0
+		// sensitivity  u_worst * dK/drho * u_worst
+		for (int k = 0; k < 3; k++) partialSens += Ui[k] * KrhoU[k];
+
+		// sensitivity  - 2 mu * u_worst * dK/drho * K * u_worst
+		for (int k = 0; k < 3; k++) partialSens += -2 * mu * KrhoU[k] * gFworst[k][vid];
+
+		// sensitivity  - lambda * N * dK/drho * u_worst
+		for (int k = 0; k < 3; k++) {
+			partialSens += -KrhoU[k] * gU[k][vid];
+		}
+#else
+		// sensitivity  - u_worst * dK/drho * u_worst
+		for (int k = 0; k < 3; k++) partialSens -= Ui[k] * KrhoU[k];
+
+#endif
+
+		atomicAdd(sens + eid, float(partialSens));
+		atomicAdd(sens_C11 + eid, float(partialSens));
+		atomicAdd(sens_C12 + eid, float(partialSens));
+		atomicAdd(sens_C44 + eid, float(partialSens));
+		// TODO_yyy
+		// atomicAdd(sens + 4*eid, float(partialSens));
+		// atomicAdd(sens + 4*eid+1, float(partialSens));
+		// atomicAdd(sens + 4*eid+2, float(partialSens));
+		// atomicAdd(sens + 4*eid+3, float(partialSens));
+	}
 }
 
 void computeSensitivity(void) {
@@ -118,7 +202,11 @@ void computeSensitivity(void) {
 	size_t grid_size, block_size;
 	make_kernel_param(&grid_size, &block_size, grids[0]->n_nodes(), 512);
 
-	computeSensitivity_kernel << <grid_size, block_size >> > (grids[0]->n_nodes(), grids[0]->getRho(), grids[0]->_keyvalues["mu"], grids[0]->getSens());
+	// computeSensitivity_kernel << <grid_size, block_size >> > (grids[0]->n_nodes(), grids[0]->getRho(), grids[0]->_keyvalues["mu"], grids[0]->getSens());
+	
+	computeSensitivity_kernel_yyy << <grid_size, block_size >> > (grids[0]->n_nodes(), grids[0]->getRho(), grids[0]->_keyvalues["mu"], \
+	                                                              grids[0]->getSens(), grids[0]->getSens_C11(), grids[0]->getSens_C12(), grids[0]->getSens_C44());
+
 	cudaDeviceSynchronize();
 	cuda_error_check;
 
@@ -127,7 +215,7 @@ void computeSensitivity(void) {
 
 	// filter sensitivity
 	grids[0]->filterSensitivity(params.filter_radius);
-
+	
 	// DEBUG
 	grids[0]->sens2matlab("sensfilt");
 }
@@ -160,6 +248,7 @@ __global__ void trySensMultiplier_kernel(
 
 	newrho[eid] = rhonew;
 }
+
 
 float updateDensities(float Vgoal) {
 	grids[0]->use_grid();
@@ -206,6 +295,73 @@ float updateDensities(float Vgoal) {
 
 		// compute new volume ratio
 		Vratio = dump_array_sum(newrho, grids[0]->n_rho()) / grids[0]->n_rho();
+
+		printf(", V = %f  goal %f\n", Vratio, Vgoal);
+
+		if (Vratio > Vgoal) {
+			g_thres_low = g_thres;
+		}
+		else if (Vratio < Vgoal) {
+			g_thres_upp = g_thres;
+		}
+	} while (abs(Vratio - Vgoal) > 1e-4 && itn++ < 30);
+
+	// update densities according to new sensitivity
+	trySensMultiplier_kernel << <grid_size, block_size >> > (grids[0]->n_nodes(), grids[0]->getRho(), grids[0]->getSens(), g_thres, params.design_step, params.damp_ratio, params.min_rho, grids[0]->getRho());
+	cudaDeviceSynchronize();
+	cuda_error_check;
+	
+	return g_thres;
+}
+
+
+//TODO_yyy
+float updateDensities_yyy(float Vgoal) {
+	grids[0]->use_grid();
+
+	size_t grid_size, block_size;
+	make_kernel_param(&grid_size, &block_size, grids[0]->n_nodes(), 512);
+
+	float Vratio = 2;
+
+	float g_thres_low = 0;
+	float g_thres_upp = 1;
+
+	// compute old volume ratio
+	double* sum = (double*)grid::Grid::getTempBuf(sizeof(double) * grids[0]->n_rho() / 100);
+	printf("grids[0]->n_rho() = %d\n", grids[0]->n_rho());
+	double Vold = parallel_sum_d(grids[0]->getRho(), sum, grids[0]->n_rho()) / (grids[0]->n_rho());
+
+	// compute maximal sensitivity
+	float* maxdump = (float*)grid::Grid::getTempBuf(sizeof(float)* grids[0]->n_rho()/ 100);
+	float g_max = parallel_maxabs(grids[0]->getSens(), maxdump, grids[0]->n_rho());
+
+	g_thres_upp = g_max;
+
+	printf("[sensitivity] max = %f\n", g_max);
+
+	float g_thres = (g_thres_low + g_thres_upp) / 2;
+
+	// iteration counter
+	int itn = 0;
+
+	// bisection search sensitivity multiplier
+	do  {
+		// update sensitivity threshold
+		g_thres = (g_thres_low + g_thres_upp) / 2;
+
+		printf("-- searching multiplier g = %4.4e", g_thres);
+
+		float* newrho = (float*)grid::Grid::getTempBuf(sizeof(float)* grids[0]->n_rho());
+
+		// update new rho
+		trySensMultiplier_kernel << <grid_size, block_size >> > (
+			grids[0]->n_nodes(), grids[0]->getRho(), grids[0]->getSens(), g_thres, params.design_step, params.damp_ratio, params.min_rho, newrho);
+		cudaDeviceSynchronize();
+		cuda_error_check;
+
+		// compute new volume ratio
+		Vratio = dump_array_sum(newrho, grids[0]->n_rho()) / (grids[0]->n_rho()*4);
 
 		printf(", V = %f  goal %f\n", Vratio, Vgoal);
 

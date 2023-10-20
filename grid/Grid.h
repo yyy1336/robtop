@@ -194,6 +194,9 @@ namespace grid {
 		std::string _name;
 		struct {
 			float* rho_e;
+			float* C11_e;
+			float* C12_e;
+			float* C44_e;
 			int * v2e[8];
 			int* v2vfine[27];
 			int* v2vcoarse[8];
@@ -209,6 +212,9 @@ namespace grid {
 			int nword_ebits;
 
 			float* g_sens;
+			float* g_sens_C11;
+			float* g_sens_C12;
+			float* g_sens_C44;
 
 			/*
 			  |_*_|_*_|_*_| * | * | * | * | * |
@@ -360,6 +366,10 @@ namespace grid {
 
 		void filterSensitivity(double radii);
 
+		void filterSensitivity_origin(double radii);
+
+		void filterSensitivity_yyy(double radii);
+
 		Eigen::Matrix<double, 3, 1> outwardNormal(double p[3]);
 
 		std::vector<int> getVflags(void);
@@ -379,6 +389,12 @@ namespace grid {
 		float* getRho(void) { return _gbuf.rho_e; }
 
 		float* getSens(void) { return _gbuf.g_sens; }
+
+		float* getSens_C11(void) { return _gbuf.g_sens_C11; }
+
+		float* getSens_C12(void) { return _gbuf.g_sens_C12; }
+
+		float* getSens_C44(void) { return _gbuf.g_sens_C44; }
 
 		double** getWorstForce(void) { return _gbuf.Fworst; }
 
@@ -439,6 +455,8 @@ namespace grid {
 		double residual(void);
 
 		void init_rho(double rh0);
+
+		void init_design_variable(double rh0, double C11_0, double C12_0, double C44_0);
 
 		float volumeRatio(void);
 
@@ -648,6 +666,8 @@ namespace grid {
 		void writeV2V(const std::string& filename, Grid& g);
 
 		void writeDensity(const std::string& filename);
+
+		void writeDensity2txt(const std::string& filename);
 
 		void readDensity(const std::string& filename);
 

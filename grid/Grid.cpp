@@ -165,9 +165,13 @@ void grid::HierarchyGrid::log(int itn)
 {
 	char fn[100];
 	if (_logFlag & mask_log_density) {
-		sprintf_s(fn, "density%04d.vdb", itn);
+		// sprintf_s(fn, "density%04d.vdb", itn);   
+		// printf("-- writing density to %s\n", fn);
+		// writeDensity(getPath(fn));
+		//yyy
+		sprintf_s(fn, "density%04d.txt", itn);
 		printf("-- writing density to %s\n", fn);
-		writeDensity(getPath(fn));
+		writeDensity2txt(getPath(fn));
 	}
 	if (_logFlag & mask_log_compliance) {
 		sprintf_s(fn, "compliance%04d.vdb", itn);
@@ -728,21 +732,22 @@ void HierarchyGrid::writeDensity(const std::string& filename)
 {
 	printf("-- writing vdb to %s\n", filename.c_str());
 
-	std::vector<int> eidmaphost(_gridlayer[0]->n_elements);
+	std::vector<int> eidmaphost(_gridlayer[0]->n_elements);  //element_id 到 rho_id的映射
 	gpu_manager_t::download_buf(eidmaphost.data(), _gridlayer[0]->_gbuf.eidmap, sizeof(int) * _gridlayer[0]->n_elements);
 	std::vector<float> rhohost(_gridlayer[0]->n_gselements);
 	gpu_manager_t::download_buf(rhohost.data(), _gridlayer[0]->_gbuf.rho_e, sizeof(float) * _gridlayer[0]->n_gselements);
 
-	std::vector<int> epos[3];
+	std::vector<int> epos[3];  //element_position,x,y,z
 	for (int i = 0; i < 3; i++) epos[i].resize(_gridlayer[0]->n_elements);
 
-	std::vector<float> evalue;
+	std::vector<float> evalue;  //element_value,\rho
 	evalue.resize(_gridlayer[0]->n_elements);
 
 	int reso = _gridlayer[0]->_ereso;
+	printf("reso = %d\n", reso); //14767902
 
 	auto& esat = elesatlist[0];
-
+    int print = 0;
 	for (int i = 0; i < esat._bitArray.size(); i++) {
 		int eword = esat._bitArray[i];
 		int eidbase = esat._chunkSat[i];
@@ -754,14 +759,88 @@ void HierarchyGrid::writeDensity(const std::string& filename)
 			int bitpos[3] = { bitid % reso, bitid / reso % reso, bitid / reso / reso };
 			int eid = eidoffset + eidbase;
 			int rhoid = eidmaphost[eid];
-			for (int k = 0; k < 3; k++) epos[k][eid] = bitpos[k];
+			for (int k = 0; k < 3; k++){
+				epos[k][eid] = bitpos[k];
+				// printf("%5d", epos[k][eid]);
+			}
+			// printf("\n");
 			evalue[eid] = rhohost[rhoid];
+			// if(print<10){
+			// 	printf("pos = (%.5f, %.5f, %.5f) ; rho = %.5f\n", epos[0][eid], epos[1][eid],epos[2][eid],evalue[eid]);
+			// 	print++;
+			// }
+
+			// if(evalue[eid] > 0.1){
+			// if(1){
+			// 	printf("pos = (%d, %d, %d), rho = %7.6f, eid = %d\n", epos[0][eid], epos[1][eid], epos[2][eid], evalue[eid], eid);
+			// 	// printf("rho = %f\n", evalue[eid]);
+			// 	// printf("x = %d\n", epos[0][eid]);
+			// 	// printf("y = %d\n", epos[1][eid]);
+			// 	// printf("z = %d\n", epos[2][eid]);
+			// 	// printf("eid = %d\n", eid);
+			// }
 			eidoffset++;
 		}
 	}
-	
+    // printf("n_elements = %5d\n", _gridlayer[0]->n_elements); //14767902
+	// int arraySize = sizeof(epos[0]) / sizeof(epos[0][0]);  //6 ???
+	// printf("epos_size = %5d\n", arraySize);
+    // for (int i = 0; i < _gridlayer[0]->n_elements; i++) {
+    //     printf("pos = (%.5f, %.5f, %.5f) ; rho = %.5f\n", epos[0][i], epos[1,i],epos[2,i],evalue[i]);
+    // }
 	openvdb_wrapper_t<float>::grid2openVDBfile(filename, epos, evalue);
 }
+
+void HierarchyGrid::writeDensity2txt(const std::string& filename)
+{
+	printf("-- writing voxel to %s\n", filename.c_str());
+
+	std::vector<int> eidmaphost(_gridlayer[0]->n_elements);  //element_id 到 rho_id的映射
+	gpu_manager_t::download_buf(eidmaphost.data(), _gridlayer[0]->_gbuf.eidmap, sizeof(int) * _gridlayer[0]->n_elements);
+	std::vector<float> rhohost(_gridlayer[0]->n_gselements);
+	gpu_manager_t::download_buf(rhohost.data(), _gridlayer[0]->_gbuf.rho_e, sizeof(float) * _gridlayer[0]->n_gselements);
+	printf("_gridlayer[0]->n_elements = %d\n", _gridlayer[0]->n_elements);  //224028
+	printf("_gridlayer[0]->n_gselements = %d\n", _gridlayer[0]->n_gselements); //224128
+	
+	std::vector<int> epos[3];  //element_position,x,y,z
+	for (int i = 0; i < 3; i++) epos[i].resize(_gridlayer[0]->n_elements);
+
+	std::vector<float> evalue;  //element_value,\rho
+	evalue.resize(_gridlayer[0]->n_elements);
+
+	int reso = _gridlayer[0]->_ereso;
+	printf("reso = %d\n", reso); //14767902
+
+	auto& esat = elesatlist[0];
+    int print = 0;
+	for (int i = 0; i < esat._bitArray.size(); i++) {
+		int eword = esat._bitArray[i];
+		int eidbase = esat._chunkSat[i];
+
+		int eidoffset = 0;
+		for (int ji = 0; ji < BitCount<unsigned int>::value; ji++) {
+			if (!read_bit(eword, ji)) continue;
+			int bitid = i * BitCount<unsigned int>::value + ji;
+			int bitpos[3] = { bitid % reso, bitid / reso % reso, bitid / reso / reso };
+			int eid = eidoffset + eidbase;
+			int rhoid = eidmaphost[eid];
+			for (int k = 0; k < 3; k++){
+				epos[k][eid] = bitpos[k];
+			}
+			evalue[eid] = rhohost[rhoid];
+            std::ofstream outputFile(filename,  std::ios::app);
+			if (outputFile.is_open()) {
+				// 写入数据到文件
+				outputFile << epos[0][eid] << "," <<epos[1][eid]<< "," <<epos[2][eid]<< "," <<evalue[eid]<< "," <<eid<<std::endl;
+				// 关闭文件
+				outputFile.close();
+			}
+			eidoffset++;
+		}
+	}
+	std::cout << "File created and data written successfully." << std::endl;
+}
+
 
 void grid::HierarchyGrid::writeSurfaceElement(const std::string& filename)
 {
@@ -1584,6 +1663,11 @@ size_t grid::Grid::build(
 	// finest layer
 	if (layer == 0) {
 		_gbuf.rho_e = (float*)gm.add_buf(_name + "rho_e ", sizeof(float) * ne_gs); gbuf_size += sizeof(float) * ne_gs;
+		//TODO_yyy :
+		_gbuf.C11_e = (float*)gm.add_buf(_name + "C11_e ", sizeof(float) * ne_gs); gbuf_size += sizeof(float) * ne_gs;
+		_gbuf.C12_e = (float*)gm.add_buf(_name + "C12_e ", sizeof(float) * ne_gs); gbuf_size += sizeof(float) * ne_gs;
+		_gbuf.C44_e = (float*)gm.add_buf(_name + "C44_e ", sizeof(float) * ne_gs); gbuf_size += sizeof(float) * ne_gs;
+		
 		_gbuf.eActiveBits = (unsigned int*)gm.add_buf(_name + "eActiveBits", sizeof(unsigned int)*ebit._bitArray.size(), ebit._bitArray.data()); gbuf_size += sizeof(unsigned int) * ebit._bitArray.size();
 		_gbuf.eActiveChunkSum = (int*)gm.add_buf(_name + "eActiveChunkSum", sizeof(int)*ebit._chunkSat.size(), ebit._chunkSat.data()); gbuf_size += sizeof(int) * ebit._chunkSat.size();
 		_gbuf.nword_ebits = ebit._bitArray.size();
@@ -1636,7 +1720,15 @@ size_t grid::Grid::build(
 
 	// allocate sensitivity buffer on first grid
 	if (_layer == 0) {
-		_gbuf.g_sens = (float*)gm.add_buf(_name + " g_sens ", sizeof(float) * ne_gs); gbuf_size += sizeof(float) * ne_gs;
+	    //TODO_yyy
+		// _gbuf.g_sens = (float*)gm.add_buf(_name + " g_sens ", sizeof(float) * ne_gs); gbuf_size += sizeof(float) * ne_gs;
+
+		// _gbuf.g_sens = (float*)gm.add_buf(_name + " g_sens ", sizeof(float) * ne_gs * 4); gbuf_size += sizeof(float) * ne_gs * 4;
+
+        _gbuf.g_sens = (float*)gm.add_buf(_name + " g_sens ", sizeof(float) * ne_gs); gbuf_size += sizeof(float) * ne_gs;
+		_gbuf.g_sens_C11 = (float*)gm.add_buf(_name + " g_sens_C11 ", sizeof(float) * ne_gs); gbuf_size += sizeof(float) * ne_gs;
+		_gbuf.g_sens_C12 = (float*)gm.add_buf(_name + " g_sens_C12 ", sizeof(float) * ne_gs); gbuf_size += sizeof(float) * ne_gs;
+		_gbuf.g_sens_C44 = (float*)gm.add_buf(_name + " g_sens_C44 ", sizeof(float) * ne_gs); gbuf_size += sizeof(float) * ne_gs;
 	}
 
 	// allocate bitflag buffer for vertex and element

@@ -127,3 +127,52 @@ To see our original source of paper "[Large-Scale Worst-Cast Topology Optimizati
 ## Reference
 
 * This repository incorporates a voxelization routine that credits the original source, [cuda_voxelizer](https://github.com/Forceflow/cuda_voxelizer).
+
+
+## Notes yyy
+1.
+运行readme中的第一个例子（distribute force Optimization）,会在finished后出现一堆同样的错误：
+```
+CUDA error occured at line 30 in file /home/yyy/Projects/robtop/mem/gpu_manager_t.cu, error type cudaErrorCudartUnloading
+```
+一开始以为finished就是optimization()结束了，后来发现不是，只是TestSuit::testMain(FLAGS_testname)结束，optimization()根本没开始。
+
+逐一排查，	
+TestSuit::testMain(FLAGS_testname)中的
+```
+else if (testname == "testdistributeforce") {
+		testDistributeForceOpt();
+	}
+```
+能正常结束，但optimization()无法开始。
+初步判断错误处在TestSuit::testMain(FLAGS_testname)结束时一些指针的生命周期结束，自动调用deleteDeviceMemory，而这里有问题。
+
+其实这也不是什么问题，试了设置-testname=None，即跳过TestSuit::testMain(FLAGS_testname)，直接进入optimization()。这个问题只在优化结束时才出现，似乎并不影响结果。
+
+另，看看testDistributeForceOpt()和optimization()有什么区别，感觉testDistributeForceOpt()已经做完优化了。
+
+OK，感觉区别基本上只在于		
+```
+void TestSuit::testDistributeForceOpt(void){
+  ...
+  while (rel_res > 1e-2 && femit++ < 50) {
+		rel_res = grids.v_cycle(1, 1);
+	}
+  ...
+}
+```
+和
+```
+void optimization(void) {
+  ...
+  double c_worst = modifiedPM();
+  ...
+}
+```
+而modifiedPM的主题基本上和前面那个是一样的，只是最大循环次数从50改成了500，并加了一些输出和一些不太懂的东西
+
+
+2.
+modifiedPM中的change of force是什么，这难道不是有限元求解位移吗，为什么看起来像求解force，force变化很小时认为收敛。
+
+。。。，你看一下robtop论文的Algorithm 1就明白了。

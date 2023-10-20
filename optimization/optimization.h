@@ -66,7 +66,11 @@ void computeSensitivity(void);
 
 bool checkAdjointVariable(void);
 
+float updateDensities_origin(float Vgoal);
+
 float updateDensities(float Vgoal);
+
+float updateDensities_yyy(float Vgoal);
 
 void optimization(void);
 
@@ -78,6 +82,8 @@ void setBoundaryCondition(std::function<bool(double[3])> fixarea, std::function<
 void uploadTemplateMatrix(void);
 
 void initDensities(double rho);
+
+void initDesignVaribles(double rho);
 
 void update_stencil(void);
 

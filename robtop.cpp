@@ -40,9 +40,11 @@ int main(int argc, char** argv)
 	uploadTemplateMatrix();
 
 	logParams("cmdline", version_hash(), argc, argv);
+	printf("0");
 
 	TestSuit::testMain(FLAGS_testname);
+    printf("1");
 
-	optimization();
+	// optimization();
 }
 

@@ -643,20 +643,26 @@ void optimization(void) {
 		// compute sensitivity
 		computeSensitivity();
 
+		printf("11111\n");
+
 		// update density
 		updateDensities(Vgoal);
 
+		printf("22222\n");
+
 		// DEBUG
-		if (itn % 5 == 0) {
-			grids.writeDensity(grids.getPath("out.vdb"));
-			grids.writeSensitivity(grids.getPath("sens.vdb"));
-		}
+		// if (itn % 5 == 0) {
+		// 	grids.writeDensity(grids.getPath("out.vdb"));
+		// 	grids.writeSensitivity(grids.getPath("sens.vdb"));
+		// }
 	}
 
-	printf("\n=   finished   =\n");
+	printf("\n=   finished ???  =\n");
 
 	// write result density field
-	grids.writeDensity(grids.getPath("out.vdb"));
+	// grids.writeDensity(grids.getPath("out.vdb"));
+	grids.writeDensity2txt(grids.getPath("out.txt"));
+	printf("\n=   finished !!!   =\n");
 
 	// write worst compliance record during optimization
 	bio::write_vector(grids.getPath("cworst"), cRecord);
@@ -687,6 +693,12 @@ void setBoundaryCondition(std::function<bool(double[3])> fixarea, std::function<
 void initDensities(double rho)
 {
 	grids[0]->init_rho(rho);
+}
+
+//TODO_yyy: set appropriate inits for Cxx
+void initDesignVaribles(double rho)
+{
+	grids[0]->init_design_variable(rho, rho, rho, rho);
 }
 
 void update_stencil(void)
