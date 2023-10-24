@@ -31,7 +31,7 @@ void logParams(std::string file, std::string version_str, int argc, char** argv)
 
 void setParameters(
 	float volRatio, float volDecrease, float designStep, float filterRadi, float dampRatio, float powerPenal,
-	float min_density, int gridreso, float youngs_modulu, float poisson_ratio, float shell_width,
+	float min_density, int gridreso, float youngs_modulu, float poisson_ratio, int cloak, float shell_width,
 	bool logdensity, bool logcompliance
 ) {
 	params.volume_ratio = volRatio;
@@ -44,6 +44,7 @@ void setParameters(
 	params.gridreso = gridreso;
 	params.youngs_modulu = youngs_modulu;
 	params.poisson_ratio = poisson_ratio;
+	params.cloak = cloak;
 	grids.set_shell_width(shell_width);
 	grids.enable_logdensity(logdensity);
 	grids.enable_logcompliance(logcompliance);
@@ -704,6 +705,7 @@ void initDesignVaribles(double rho)
 void update_stencil(void)
 {
 	grids.update_stencil();
+	// printf("-- c3 = %6.4e\n", grids[0]->compliance());
 }
 
 void test_rigid_displacement(void) {

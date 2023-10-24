@@ -11,12 +11,17 @@
 //#include <glm/glm.hpp>
 //#include "matlab_utils.h"
 
+// #include "mmaOptimizer.h"  //no conflict, make Successed!
+
 #define DIRICHLET_DIAGONAL_WEIGHT 1e6f
 //#define DIRICHLET_DIAGONAL_WEIGHT 1
 
 using namespace grid;
 
 __constant__ double gTemplateMatrix[24][24];
+__constant__ double gTemplateMatrix11[24][24];
+__constant__ double gTemplateMatrix12[24][24];
+__constant__ double gTemplateMatrix44[24][24];
 __constant__ int* gV2E[8];
 __constant__ int* gV2Vfine[27];
 __constant__ int* gV2Vcoarse[8];
@@ -78,11 +83,27 @@ __device__ bool isValidNode(int vid) {
 	return gV2V[13][vid] != -1;
 }
 
-__device__ void loadTemplateMatrix(volatile double KE[24][24]) {
+__device__ void loadTemplateMatrix(volatile double KE[24][24], int Cid) {
 	int i = threadIdx.x / 24;
 	int j = threadIdx.x % 24;
 	if (i < 24) {
-		KE[i][j] = gTemplateMatrix[i][j];
+		switch (Cid)
+		{
+		case 0:
+			KE[i][j] = gTemplateMatrix[i][j];
+			break;
+		case 1:
+			KE[i][j] = gTemplateMatrix11[i][j];
+			break;
+		case 2:
+			KE[i][j] = gTemplateMatrix12[i][j];
+			break;
+		case 3:
+			KE[i][j] = gTemplateMatrix44[i][j];
+			break;
+		default:
+			break;
+		}
 	}
 	int nfill = blockDim.x;
 	while (nfill < 24 * 24) {
@@ -90,7 +111,23 @@ __device__ void loadTemplateMatrix(volatile double KE[24][24]) {
 		i = kid / 24;
 		j = kid % 24;
 		if (i < 24) {
-			KE[i][j] = gTemplateMatrix[i][j];
+			switch (Cid)
+			{
+			case 0:
+				KE[i][j] = gTemplateMatrix[i][j];
+				break;
+			case 1:
+				KE[i][j] = gTemplateMatrix11[i][j];
+				break;
+			case 2:
+				KE[i][j] = gTemplateMatrix12[i][j];
+				break;
+			case 3:
+				KE[i][j] = gTemplateMatrix44[i][j];
+				break;
+			default:
+				break;
+			}	
 		}
 		nfill += blockDim.x;
 	}
@@ -178,14 +215,18 @@ __global__ void restrict_stencil_dyadic_kernel(int nv_coarse, double* rxcoarse_,
 
 // on the fly assembly
 template<int BlockSize = 32 * 9>
-__global__ void restrict_stencil_dyadic_OTFA_kernel(int nv_coarse, double* rxcoarse_, int nv_fine, float* rhofine) {
+__global__ void restrict_stencil_dyadic_OTFA_kernel(int nv_coarse, double* rxcoarse_, int nv_fine, float* rhofine, int cloak) {
 	int tid = blockIdx.x*blockDim.x + threadIdx.x;
 
 	//__shared__ int restrict_elements[64];
 	__shared__ double KE[24][24];
 
 	// load template matrix from constant memory to shared memory
-	loadTemplateMatrix(KE);
+	// if(cloak == 0){
+	// 	loadTemplateMatrix(KE);
+	// }
+	loadTemplateMatrix(KE, 0);
+	
 
 	int warpid = threadIdx.x / 32;
 	int warptid = threadIdx.x % 32;
@@ -273,18 +314,20 @@ __global__ void restrict_stencil_dyadic_OTFA_kernel(int nv_coarse, double* rxcoa
 	}
 }
 
-void HierarchyGrid::restrict_stencil_dyadic(Grid& dstcoarse, Grid& srcfine)
+void HierarchyGrid::restrict_stencil_dyadic(Grid& dstcoarse, Grid& srcfine, int cloak)
 {
 	dstcoarse.use_grid();
 	size_t grid_size, block_size;
 	constexpr int BlockSize = 32 * 6;
 	if (dstcoarse._layer == 0 && srcfine._layer == 1) {
+		printf("\n\033[33m-- restrict_stencil_dyadic_OTFA_kernel --\n\033[0m");
 		make_kernel_param(&grid_size, &block_size, dstcoarse.n_gsvertices * 9, BlockSize);
-		restrict_stencil_dyadic_OTFA_kernel<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, dstcoarse._gbuf.rho_e);
+		restrict_stencil_dyadic_OTFA_kernel<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, dstcoarse._gbuf.rho_e, cloak);
 		cudaDeviceSynchronize();
 		cuda_error_check;
 	}
 	else {
+		printf("\n\033[33m-- restrict_stencil_dyadic_kernel --\n\033[0m");
 		make_kernel_param(&grid_size, &block_size, dstcoarse.n_gsvertices * 9, BlockSize);
 		restrict_stencil_dyadic_kernel<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rxStencil);
 		cudaDeviceSynchronize();
@@ -307,7 +350,7 @@ __global__ void restrict_stencil_nondyadic_OTFA_NS_kernel(int nv_coarse, double*
 	//__shared__ double coarseStencil[27][BlockSize / 32][32];
 
 	// load template matrix from constant memory to shared memory
-	loadTemplateMatrix(KE);
+	loadTemplateMatrix(KE, 0);
 
 	// compute weight
 	if (threadIdx.x < 64) {
@@ -388,9 +431,114 @@ __global__ void restrict_stencil_nondyadic_OTFA_NS_kernel(int nv_coarse, double*
 	}
 }
 
+
 // on the fly assembly
 template<int BlockSize = 32 * 9>
-__global__ void restrict_stencil_nondyadic_OTFA_WS_kernel(int nv_coarse, double* rxcoarse_, int nv_fine, float* rhofine, int* vfineflag) {
+__global__ void restrict_stencil_nondyadic_OTFA_NS_kernel_cloak1(int nv_coarse, double* rxcoarse_, int nv_fine, float* rhofine, float* c11fine, float* c12fine, float* c44fine, int* vfineflag) {
+	int tid = blockDim.x*blockIdx.x + threadIdx.x;
+	int warpid = threadIdx.x / 32;
+	int warptid = threadIdx.x % 32;
+
+
+	GraftArray<double, 27, 9> rxCoarse(rxcoarse_, nv_coarse);
+    
+	__shared__ double KE11[24][24]; 
+	__shared__ double KE12[24][24]; 
+	__shared__ double KE44[24][24]; 
+	__shared__ double W[4][4][4];
+	//__shared__ double coarseStencil[27][BlockSize / 32][32];
+
+	// load template matrix from constant memory to shared memory
+	loadTemplateMatrix(KE11,1);
+	loadTemplateMatrix(KE12,2);
+	loadTemplateMatrix(KE44,3);
+
+	// compute weight
+	if (threadIdx.x < 64) {
+		int i = threadIdx.x % 4;
+		int j = threadIdx.x % 16 / 4;
+		int k = threadIdx.x / 16;
+		W[k][j][i] = (4 - i)*(4 - j)*(4 - k) / 64.f;
+	}
+	__syncthreads();
+	
+	// init coarseStencil
+	//initSharedMem(&coarseStencil[0][0][0], sizeof(coarseStencil) / sizeof(double));
+	double coarseStencil[27] = { 0. };
+
+	int ke_id = tid / nv_coarse;
+
+	int vid = tid % nv_coarse;
+
+	if (ke_id >= 9) return;
+
+	//int flagword = vcoarseflag[vid];
+
+	//if (flagword & Grid::Bitmask::mask_invalid) return;
+
+	// reorder K3 in row major order
+	int k3row = ke_id / 3;
+	int k3col = ke_id % 3;
+
+	float power = power_penalty[0];
+
+	// traverse neighbor nodes of fine element center (which is the vertex on fine fine grid)
+	for (int i = 0; i < 64; i++) {
+		int i2[3] = { (i % 4) * 2 + 1 ,(i % 16 / 4) * 2 + 1 ,(i / 16) * 2 + 1 };
+		//int m2 = i2[0] + i2[1] + i2[2] - 3;
+
+		// get fine element center vertex
+		int vn = gV2VfineC[i][vid];
+
+		if (vn == -1) continue;
+
+		// should traverse 7x7x7 neigbor nodes, and sum their weighted stencil, to reduce bandwidth, we traverse 8x8x8 elements 
+		// traverse the neighbor fine fine element of this vertex and assembly the element matrices
+		for (int j = 0; j < 8; j++) {
+			int efineid = gVfine2Efine[j][vn];
+
+			if (efineid == -1) continue;
+
+			float rho_p = powf(rhofine[efineid], power);
+			float c11 = c11fine[efineid];
+			float c12 = c12fine[efineid];
+			float c44 = c44fine[efineid];
+
+			int epos[3] = { i2[0] + j % 2 - 1,i2[1] + j % 4 / 2 - 1,i2[2] + j / 4 - 1 };
+
+			// traverse the vertex of neighbor element (rows of element matrix), compute the weight on this vertex 
+			for (int ki = 0; ki < 8; ki++) {
+				int vipos[3] = { epos[0] + ki % 2,epos[1] + ki % 4 / 2,epos[2] + ki / 4 };
+				int wipos[3] = { abs(vipos[0] - 4),abs(vipos[1] - 4),abs(vipos[2] - 4) };
+				if (wipos[0] >= 4 || wipos[1] >= 4 || wipos[2] >= 4) continue;
+				double w_ki = W[wipos[0]][wipos[1]][wipos[2]] * rho_p;
+
+				// traverse another vertex of neighbor element (cols of element matrix), get the 3x3 Ke and multiply the row weights
+				for (int kj = 0; kj < 8; kj++) {
+					int kjpos[3] = { epos[0] + kj % 2 , epos[1] + kj % 4 / 2 , epos[2] + kj / 4 };
+					double wk = w_ki * (c11 * KE11[ki * 3 + k3row][kj * 3 + k3col] + c12 * KE12[ki * 3 + k3row][kj * 3 + k3col] + c44 * KE44[ki * 3 + k3row][kj * 3 + k3col]);
+					//  the weighted element matrix should split to coarse vertex, traverse the coarse vertices and split 3x3 Ke to coarse vertex by splitting weights
+					for (int vsplit = 0; vsplit < 27; vsplit++) {
+						int vsplitpos[3] = { vsplit % 3 * 4, vsplit % 9 / 3 * 4,vsplit / 9 * 4 };
+						int wjpos[3] = { abs(vsplitpos[0] - kjpos[0]), abs(vsplitpos[1] - kjpos[1]), abs(vsplitpos[2] - kjpos[2]) };
+						if (wjpos[0] >= 4 || wjpos[1] >= 4 || wjpos[2] >= 4) continue;
+						double wkw = wk * W[wjpos[0]][wjpos[1]][wjpos[2]];
+						coarseStencil[vsplit]/*[warpid][warptid]*/ += wkw;
+					}
+				}
+			}
+		}
+	}
+
+	for (int i = 0; i < 27; i++) {
+		rxCoarse[i][ke_id][vid] = coarseStencil[i]/*[warpid][warptid]*/;
+	}
+}
+
+
+// on the fly assembly
+template<int BlockSize = 32 * 9>
+__global__ void restrict_stencil_nondyadic_OTFA_WS_kernel(int nv_coarse, double* rxcoarse_, int nv_fine, float* rhofine, int* vfineflag, int cloak) {
 	int tid = blockDim.x*blockIdx.x + threadIdx.x;
 	int warpid = threadIdx.x / 32;
 	int warptid = threadIdx.x % 32;
@@ -398,12 +546,23 @@ __global__ void restrict_stencil_nondyadic_OTFA_WS_kernel(int nv_coarse, double*
 
 	GraftArray<double, 27, 9> rxCoarse(rxcoarse_, nv_coarse);
 
-	__shared__ double KE[24][24];
+    __shared__ double KE[24][24];
+	// __shared__ double KE11[24][24];
+	// __shared__ double KE12[24][24];
+	// __shared__ double KE44[24][24];
 	__shared__ double W[4][4][4];
 	//__shared__ double coarseStencil[27][BlockSize / 32][32];
 
 	// load template matrix from constant memory to shared memory
-	loadTemplateMatrix(KE);
+	// if(cloak == 0){
+	// 	loadTemplateMatrix(KE);
+	// }
+	// else if (cloak == 1 || cloak == 2){
+
+	// 	loadTemplateMatrix(KE);
+	// }
+	loadTemplateMatrix(KE, 0);
+	
 
 	// compute weight
 	if (threadIdx.x < 64) {
@@ -505,7 +664,7 @@ __global__ void restrict_stencil_nondyadic_OTFA_WS_kernel(int nv_coarse, double*
 	}
 }
 
-void HierarchyGrid::restrict_stencil_nondyadic(Grid& dstcoarse, Grid& srcfine)
+void HierarchyGrid::restrict_stencil_nondyadic(Grid& dstcoarse, Grid& srcfine, int cloak)
 {
 	if (dstcoarse._layer != 2 || srcfine._layer != 0) {
 		std::cout << "\033[31m" << "Non dyadic restriction is only applied on finest grid" << "\033[0m" << std::endl;
@@ -517,31 +676,41 @@ void HierarchyGrid::restrict_stencil_nondyadic(Grid& dstcoarse, Grid& srcfine)
 	size_t grid_size, block_size;
 	make_kernel_param(&grid_size, &block_size, dstcoarse.n_gsvertices * 9, BlockSize);
 	if (_mode == no_support_constrain_force_direction || _mode == no_support_free_force) {
-		restrict_stencil_nondyadic_OTFA_NS_kernel<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rho_e, srcfine._gbuf.vBitflag);
+		if(cloak == 0){
+			printf("\n\033[33m-- restrict_stencil_nondyadic_OTFA_NS_kernel --\n\033[0m");
+		    restrict_stencil_nondyadic_OTFA_NS_kernel<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rho_e, srcfine._gbuf.vBitflag);
+		}
+		else if(cloak == 1){
+			printf("\n\033[33m-- restrict_stencil_nondyadic_OTFA_NS_kernel_cloak1 --\n\033[0m");
+		    restrict_stencil_nondyadic_OTFA_NS_kernel_cloak1<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rho_e, srcfine._gbuf.C11_e, srcfine._gbuf.C12_e, srcfine._gbuf.C44_e, srcfine._gbuf.vBitflag);
+		}
+		
 	}
 	else if (_mode == with_support_constrain_force_direction || _mode == with_support_free_force) {
-		restrict_stencil_nondyadic_OTFA_WS_kernel<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rho_e, srcfine._gbuf.vBitflag);
+		printf("\n\033[33m-- restrict_stencil_nondyadic_OTFA_WS_kernel --\n\033[0m");
+		restrict_stencil_nondyadic_OTFA_WS_kernel<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rho_e, srcfine._gbuf.vBitflag, cloak);
 	}
 	cudaDeviceSynchronize();
 	cuda_error_check;
 }
 
-void HierarchyGrid::restrict_stencil(Grid& dstcoarse, Grid& srcfine)
+void HierarchyGrid::restrict_stencil(Grid& dstcoarse, Grid& srcfine, int cloak)
 {
+	// printf("dstcoarse = %d, srcfine = %d", dstcoarse._layer, srcfine._layer);
 	if (dstcoarse.is_dummy()) return;
 	if (dstcoarse._layer == 0) return;
 
 	init_array(dstcoarse._gbuf.rxStencil, double{ 0 }, 27 * 9 * dstcoarse.n_gsvertices);
 
 	if (_setting.skiplayer1 && dstcoarse._layer == 2 && srcfine._layer == 0) {
-		restrict_stencil_nondyadic(dstcoarse, srcfine);
+		restrict_stencil_nondyadic(dstcoarse, srcfine, cloak);
 	}
 	else {
 		if (dstcoarse._layer - srcfine._layer != 1) {
 			printf("\033[31mOnly Support stencil restriction between neighbor layers!\033[0m\n");
 			throw std::runtime_error("");
 		}
-		restrict_stencil_dyadic(dstcoarse, srcfine);
+		restrict_stencil_dyadic(dstcoarse, srcfine, cloak);
 	}
 }
 
@@ -803,7 +972,7 @@ __global__ void gs_relax_OTFA_NS_kernel(int nv_gs, int gs_offset, float* rholist
 	__shared__ double sumS[9][4][32];
 
 	// load template matrix from constant memory to shared memory
-	loadTemplateMatrix(KE);
+	loadTemplateMatrix(KE, 0);
 
 	int warpId = threadIdx.x / 32;
 	int warpTid = threadIdx.x % 32;
@@ -931,7 +1100,7 @@ __global__ void gs_relax_OTFA_WS_kernel(int nv_gs, int gs_offset, float* rholist
 	__shared__ double sumS[9][4][32];
 
 	// load template matrix from constant memory to shared memory
-	loadTemplateMatrix(KE);
+	loadTemplateMatrix(KE, 0);
 
 	int warpId = threadIdx.x / 32;
 	int warpTid = threadIdx.x % 32;
@@ -1127,7 +1296,7 @@ __global__ void restrict_adjoint_stencil_nondyadic_OTFA_constrain_force_directio
 	__shared__ double sumCoarseStencil[BlockSize / 32][27][32];
 
 	// load template matrix from constant memory to shared memory
-	loadTemplateMatrix(KE);
+	loadTemplateMatrix(KE, 0);
 
 	// compute weight
 	if (threadIdx.x < 64) {
@@ -1453,7 +1622,7 @@ __global__ void update_residual_OTFA_NS_kernel(int nv, float* rholist) {
 
 	int tid = blockIdx.x*blockDim.x + threadIdx.x;
 
-	loadTemplateMatrix(KE);
+	loadTemplateMatrix(KE, 0);
 
 	if (tid >= nv) return;
 
@@ -1504,7 +1673,7 @@ __global__ void update_residual_OTFA_WS_kernel(int nv, float* rholist) {
 
 	int tid = blockIdx.x*blockDim.x + threadIdx.x;
 
-	loadTemplateMatrix(KE);
+	loadTemplateMatrix(KE, 0);
 
 	if (tid >= nv) return;
 
@@ -1564,7 +1733,7 @@ __global__ void update_residual_OTFA_WS_kernel_1(int nv, float* rholist) {
 
 	int tid = blockIdx.x*blockDim.x + threadIdx.x;
 
-	loadTemplateMatrix(KE);
+	loadTemplateMatrix(KE, 0);
 
 	int warpId = threadIdx.x / 32;
 	int warpTid = threadIdx.x % 32;
@@ -2461,17 +2630,17 @@ void Grid::filterSensitivity(double radii)
 	init_array(_gbuf.g_sens, float{ 0 }, n_gselements);
 	filterSensitivity_kernel << <grid_size, block_size >> > (_gbuf.nword_ebits, esat, _ereso, g_sens_copy, _gbuf.g_sens, radii, fr, _gbuf.eidmap);
 
-	cudaMemcpy(g_sens_copy, _gbuf.g_sens_C11, sizeof(float) * n_gselements, cudaMemcpyDeviceToDevice);
-	init_array(_gbuf.g_sens_C11, float{ 0 }, n_gselements);
-	filterSensitivity_kernel << <grid_size, block_size >> > (_gbuf.nword_ebits, esat, _ereso, g_sens_copy, _gbuf.g_sens_C11, radii, fr, _gbuf.eidmap);
+	// cudaMemcpy(g_sens_copy, _gbuf.g_sens_C11, sizeof(float) * n_gselements, cudaMemcpyDeviceToDevice);
+	// init_array(_gbuf.g_sens_C11, float{ 0 }, n_gselements);
+	// filterSensitivity_kernel << <grid_size, block_size >> > (_gbuf.nword_ebits, esat, _ereso, g_sens_copy, _gbuf.g_sens_C11, radii, fr, _gbuf.eidmap);
 
-	cudaMemcpy(g_sens_copy, _gbuf.g_sens_C12, sizeof(float) * n_gselements, cudaMemcpyDeviceToDevice);
-	init_array(_gbuf.g_sens_C12, float{ 0 }, n_gselements);
-	filterSensitivity_kernel << <grid_size, block_size >> > (_gbuf.nword_ebits, esat, _ereso, g_sens_copy, _gbuf.g_sens_C12, radii, fr, _gbuf.eidmap);
+	// cudaMemcpy(g_sens_copy, _gbuf.g_sens_C12, sizeof(float) * n_gselements, cudaMemcpyDeviceToDevice);
+	// init_array(_gbuf.g_sens_C12, float{ 0 }, n_gselements);
+	// filterSensitivity_kernel << <grid_size, block_size >> > (_gbuf.nword_ebits, esat, _ereso, g_sens_copy, _gbuf.g_sens_C12, radii, fr, _gbuf.eidmap);
 
-	cudaMemcpy(g_sens_copy, _gbuf.g_sens_C44, sizeof(float) * n_gselements, cudaMemcpyDeviceToDevice);
-	init_array(_gbuf.g_sens_C44, float{ 0 }, n_gselements);
-	filterSensitivity_kernel << <grid_size, block_size >> > (_gbuf.nword_ebits, esat, _ereso, g_sens_copy, _gbuf.g_sens_C44, radii, fr, _gbuf.eidmap);
+	// cudaMemcpy(g_sens_copy, _gbuf.g_sens_C44, sizeof(float) * n_gselements, cudaMemcpyDeviceToDevice);
+	// init_array(_gbuf.g_sens_C44, float{ 0 }, n_gselements);
+	// filterSensitivity_kernel << <grid_size, block_size >> > (_gbuf.nword_ebits, esat, _ereso, g_sens_copy, _gbuf.g_sens_C44, radii, fr, _gbuf.eidmap);
 
 	cudaDeviceSynchronize();
 
@@ -2486,7 +2655,7 @@ __global__ void applyK_OTFA_kernel(int nv, devArray_t<double*, 3> u, devArray_t<
 	__shared__ double KE[24][24];
 
 	// load template matrix from constant memory to shared memory
-	loadTemplateMatrix(KE);
+	loadTemplateMatrix(KE, 0);
 
 	int vid = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -3269,7 +3438,7 @@ __global__ void apply_adjointK_kernel(int nv, float* rholist,
 
 	int tid = blockIdx.x*blockDim.x + threadIdx.x;
 
-	loadTemplateMatrix(KE);
+	loadTemplateMatrix(KE, 0);
 
 	if (tid >= nv) return;
 
@@ -3492,7 +3661,7 @@ __global__ void elementCompliance_kernel(int nv, devArray_t<double*, 3> ulist, d
 
 	__shared__ double KE[24][24];
 
-	loadTemplateMatrix(KE);
+	loadTemplateMatrix(KE, 0);
 
 	if (tid >= nv) return;
 

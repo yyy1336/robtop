@@ -31,6 +31,8 @@ DEFINE_double(min_density, 1e-3, "Minimal density restriction");
 
 DEFINE_double(poisson_ratio, 0.4, "Material Poisson Ratio");
 
+DEFINE_int32(cloak, 0, "0,1,2");
+
 DEFINE_double(shell_width, 3, "Shell width in the unit of element");
 
 DEFINE_string(workmode, "", "Working mode");
@@ -476,6 +478,7 @@ void output_option(void) {
 	std::cout << " =min_density      - - - - - - - - - - - - - - - -   " << FLAGS_min_density << std::endl;;
 	std::cout << " =youngs_module    - - - - - - - - - - - - - - - -   " << FLAGS_youngs_modulus << std::endl;;
 	std::cout << " =poisson_ratio    - - - - - - - - - - - - - - - -   " << FLAGS_poisson_ratio << std::endl;;
+	std::cout << " =cloak            - - - - - - - - - - - - - - - -   " << FLAGS_cloak << std::endl;;
 	std::cout << " =shell_width      - - - - - - - - - - - - - - - -   " << FLAGS_shell_width << std::endl;
 	std::cout << " =work_mode        - - - - - - - - - - - - - - - -   " << FLAGS_workmode << std::endl;
 	std::cout << " =logdensity       - - - - - - - - - - - - - - - -   " << (FLAGS_logdensity ? "Yes" : "No") << std::endl;

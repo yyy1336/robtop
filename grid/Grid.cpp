@@ -19,6 +19,8 @@ using namespace grid;
 #endif
 #endif
 
+grid::GridParameter gridparams;
+
 std::vector<Triangle> aabb_tris;
 aabb_tree_t aabb_tree;
 
@@ -35,6 +37,10 @@ static Eigen::Matrix<double, -1, -1> Klastkernel;
 static std::vector<int> vlastrowid;
 static int nvlastrows;
 static Eigen::BDCSVD<Eigen::MatrixXd> svd;
+
+void grid::setGridParameters(int cloak) {
+	gridparams.cloak = cloak;
+}
 
 void HierarchyGrid::buildAABBTree(const std::vector<float>& pcoords, const std::vector<int>& trifaces)
 {
@@ -2198,15 +2204,21 @@ void Grid::enumerate_gs_subset(
 }
 
 void HierarchyGrid::update_stencil(void)
-{
+{ 
+	int cloak = gridparams.cloak;
+	// printf("\n\033[33m-- _gridlayer.size() = %d --\n\033[0m", _gridlayer.size());
 	for (int i = 0; i < _gridlayer.size(); i++) {
-		if (_gridlayer[i]->is_dummy()) continue;
+		// if (_gridlayer[i]->is_dummy()) printf("\n\033[33m-- skiplayer: %d --\n\033[0m", i);
+		if (_gridlayer[i]->is_dummy()) continue; //skiplayer
 		if (i == 0) continue;
-		restrict_stencil(*_gridlayer[i], *_gridlayer[i]->fineGrid);
+		// printf("\n\033[33m-- gridlayer%d --\n\033[0m", i);
+		restrict_stencil(*_gridlayer[i], *_gridlayer[i]->fineGrid, cloak);
+		// printf("-- c1 = %6.4e\n", grids[0]->compliance());
 		// last layer build host system
 		if (i == _gridlayer.size() - 1) {
 			_gridlayer[i]->buildCoarsestSystem();
 		}
+		// printf("-- c2 = %6.4e\n", grids[0]->compliance());
 	}
 }
 

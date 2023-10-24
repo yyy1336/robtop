@@ -2,6 +2,9 @@
 #include "lib.cuh"
 
 extern  __constant__  double gTemplateMatrix[24][24];
+extern  __constant__  double gTemplateMatrix11[24][24];
+extern  __constant__  double gTemplateMatrix12[24][24];
+extern  __constant__  double gTemplateMatrix44[24][24];
 extern  __constant__ int* gV2E[8];
 extern  __constant__ int* gV2Vfine[27];
 extern  __constant__ int* gV2Vcoarse[8];
@@ -39,7 +42,7 @@ void TestSuit::scaleVector(float* p_data, size_t len, float scale)
 }
 
 
-extern __device__ void loadTemplateMatrix(volatile double KE[24][24]);
+extern __device__ void loadTemplateMatrix(volatile double KE[24][24], int Cid);
 //__device__ void loadTemplateMatrix(volatile double KE[24][24]) {
 //	int i = threadIdx.x / 24;
 //	int j = threadIdx.x % 24;

@@ -10,7 +10,7 @@
 extern void version_info(void);
 std::string version_hash(void);
 extern void init_cuda(void);
-
+extern void hello_extern(void);
 
 config_parser_t parser;
 
@@ -22,13 +22,17 @@ int main(int argc, char** argv)
 
 	selfTest();
 
+	hello_extern();
+
 	parser.parse(argc, argv);
 
 	setParameters(
 		FLAGS_volume_ratio, FLAGS_vol_reduction, FLAGS_design_step, FLAGS_filter_radius, FLAGS_damp_ratio, FLAGS_power_penalty, FLAGS_min_density,
-		FLAGS_gridreso, FLAGS_youngs_modulus, FLAGS_poisson_ratio, FLAGS_shell_width,
+		FLAGS_gridreso, FLAGS_youngs_modulus, FLAGS_poisson_ratio, FLAGS_cloak, FLAGS_shell_width,
 		FLAGS_logdensity, FLAGS_logcompliance);
-
+    
+	setGridParameters(FLAGS_cloak);
+	
 	setOutpurDir(FLAGS_outdir);
 
 	setWorkMode(FLAGS_workmode);
@@ -45,6 +49,6 @@ int main(int argc, char** argv)
 	TestSuit::testMain(FLAGS_testname);
     printf("1");
 
-	// optimization();
+	optimization();
 }
 

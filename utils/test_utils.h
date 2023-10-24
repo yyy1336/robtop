@@ -42,7 +42,9 @@ public:
 
 	static void testModifiedPMError(void);
 
-	static void testDistributeForceOpt(void);
+	static void testDistributeForceOpt_OC(void);
+
+	static void testDistributeForceOpt_MMA(void);
 
 	static void extractMeshFromDensity(void);
 

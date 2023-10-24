@@ -45,6 +45,8 @@ DECLARE_double(min_density);
 
 DECLARE_double(poisson_ratio);
 
+DECLARE_int32(cloak);
+
 DECLARE_double(shell_width);
 
 DECLARE_string(workmode);

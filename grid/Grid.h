@@ -15,6 +15,10 @@
 
 namespace grid {
 
+	struct GridParameter {
+	    int cloak; //0,1,2
+    };
+
 	class HierarchyGrid;
 
 	template<typename T>
@@ -134,6 +138,8 @@ namespace grid {
 		}
 	};
 	void wordReverse_g(size_t nword, unsigned int* wordlist);
+
+	void setGridParameters(int cloak);
 
 	void cubeGridSetSolidVertices(int reso, const std::vector<unsigned int>& solid_ebit, std::vector<unsigned int>& solid_vbit);
 
@@ -639,15 +645,15 @@ namespace grid {
 
 		void resetAllResidual(void);
 
-		void restrict_stencil_dyadic(Grid& dstcoarse, Grid& srcfine);
+		void restrict_stencil_dyadic(Grid& dstcoarse, Grid& srcfine, int cloak);
 
-		void restrict_stencil_nondyadic(Grid& dstcoarse, Grid& srcfine);
+		void restrict_stencil_nondyadic(Grid& dstcoarse, Grid& srcfine, int cloak);
 
 		//void restrict_adjoint_stencil_nondyadic(Grid& dstcoarse, Grid& srcfine);
 
 		//void restrict_adjoint_stencil_dyadic(Grid& dstcoarse, Grid& srcfine);
 
-		void restrict_stencil(Grid& dstcoarse, Grid& srcfine);
+		void restrict_stencil(Grid& dstcoarse, Grid& srcfine, int cloak);
 
 		//void restrict_adjoint_stencil(Grid& dstcoarse, Grid& srcfine);
 

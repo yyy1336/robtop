@@ -9,6 +9,9 @@
 //#include "gpuVector.h"
 
 extern  __constant__  double gTemplateMatrix[24][24];
+extern  __constant__  double gTemplateMatrix11[24][24];
+extern  __constant__  double gTemplateMatrix12[24][24];
+extern  __constant__  double gTemplateMatrix44[24][24];
 extern  __constant__ int* gV2E[8];
 extern  __constant__ int* gV2Vfine[27];
 extern  __constant__ int* gV2Vcoarse[8];
@@ -33,7 +36,7 @@ extern  __constant__ int gLayerid[1];
 extern  __constant__ int gDEBUG[1];
 
 
-extern __device__ void loadTemplateMatrix(volatile double KE[24][24]);
+extern __device__ void loadTemplateMatrix(volatile double KE[24][24], int Cid);
 
 template<int N>
 __device__ int gridPos2id(int x, int y, int z) {
@@ -47,7 +50,7 @@ __global__ void computeSensitivity_kernel(int nv, float* rholist, double mu, flo
 
 	__shared__ double KE[24][24];
 
-	loadTemplateMatrix(KE);
+	loadTemplateMatrix(KE, 0);
 
 	if (tid >= nv) return;
 
@@ -121,7 +124,7 @@ __global__ void computeSensitivity_kernel_yyy(int nv, float* rholist, double mu,
 
 	__shared__ double KE[24][24];
 
-	loadTemplateMatrix(KE);
+	loadTemplateMatrix(KE, 0);
 
 	if (tid >= nv) return;
 
@@ -264,6 +267,7 @@ float updateDensities(float Vgoal) {
 	// compute old volume ratio
 	double* sum = (double*)grid::Grid::getTempBuf(sizeof(double) * grids[0]->n_rho() / 100);
 	double Vold = parallel_sum_d(grids[0]->getRho(), sum, grids[0]->n_rho()) / grids[0]->n_rho();
+	printf("Vold = %f\n", Vold);
 
 	// compute maximal sensitivity
 	float* maxdump = (float*)grid::Grid::getTempBuf(sizeof(float)* grids[0]->n_rho() / 100);
@@ -308,6 +312,11 @@ float updateDensities(float Vgoal) {
 
 	// update densities according to new sensitivity
 	trySensMultiplier_kernel << <grid_size, block_size >> > (grids[0]->n_nodes(), grids[0]->getRho(), grids[0]->getSens(), g_thres, params.design_step, params.damp_ratio, params.min_rho, grids[0]->getRho());
+	
+	double* sumnew = (double*)grid::Grid::getTempBuf(sizeof(double) * grids[0]->n_rho() / 100);
+	double Vnew = parallel_sum_d(grids[0]->getRho(), sumnew, grids[0]->n_rho()) / grids[0]->n_rho();
+	printf("Vnew = %f\n", Vnew);
+	
 	cudaDeviceSynchronize();
 	cuda_error_check;
 	
@@ -361,7 +370,7 @@ float updateDensities_yyy(float Vgoal) {
 		cuda_error_check;
 
 		// compute new volume ratio
-		Vratio = dump_array_sum(newrho, grids[0]->n_rho()) / (grids[0]->n_rho()*4);
+		Vratio = dump_array_sum(newrho, grids[0]->n_rho()) / (grids[0]->n_rho());
 
 		printf(", V = %f  goal %f\n", Vratio, Vgoal);
 
@@ -487,10 +496,30 @@ void selfTest(void)
 void uploadTemplateMatrix(void)
 {
 	double element_len = grids.elementLength();
-	initTemplateMatrix(element_len, gpu_manager, params.youngs_modulu, params.poisson_ratio);
-	const double* ke = getTemplateMatrixElements();
-	cudaMemcpyToSymbol(gTemplateMatrix, ke, sizeof(gTemplateMatrix));
-	cuda_error_check;
+	if(params.cloak == 0){
+		printf("params.cloak = %d\n", params.cloak);
+		initTemplateMatrix(element_len, gpu_manager, params.youngs_modulu, params.poisson_ratio);
+	}
+	else if(params.cloak == 1 || params.cloak == 2){
+		printf("params.cloak = %d\n", params.cloak);
+		initTemplateMatrix_cloak1(element_len, gpu_manager, params.youngs_modulu, params.poisson_ratio);
+	}
+	
+	if(params.cloak == 0){
+		const double* ke = getTemplateMatrixElements();
+	    cudaMemcpyToSymbol(gTemplateMatrix, ke, sizeof(gTemplateMatrix));
+	    cuda_error_check;
+	}
+	else if(params.cloak == 1 || params.cloak == 2){
+		const double* ke11 = getTemplateMatrixElements11();
+	    cudaMemcpyToSymbol(gTemplateMatrix11, ke11, sizeof(gTemplateMatrix11));
+		const double* ke12 = getTemplateMatrixElements12();
+	    cudaMemcpyToSymbol(gTemplateMatrix12, ke12, sizeof(gTemplateMatrix12));
+		const double* ke44 = getTemplateMatrixElements44();
+	    cudaMemcpyToSymbol(gTemplateMatrix44, ke44, sizeof(gTemplateMatrix44));
+	    cuda_error_check;
+	}
+	
 
 	// upload power penalty
 	float power = params.power_penalty;

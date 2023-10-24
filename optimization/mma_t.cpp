@@ -26,17 +26,21 @@ bool mma_t::update(Scalar* dev_df, Scalar** dg, Scalar* dev_g)
 		vdg[i] = (gVector::Map(dg[i], n_dim()));
 		vdg_ptr[i] = &vdg[i];
 	}
-
+    printf("bool mma_t::update 1\n");
 	gv::gVector vg = gVector::Map(dev_g, n_constrain());
+	printf("bool mma_t::update 1.1\n");
 
 	vdf.toMatlab("df");
+	printf("bool mma_t::update 1.2\n");
 	//gv::gVector::toMatlab("dg", dg, n_dim());
 	vg.toMatlab("g");
+	printf("bool mma_t::update 1.3\n");
 
-	auto err_step = subproblem.solve(&vdf, vdg_ptr, &vg, dx);
+	auto err_step = subproblem.solve(&vdf, vdg_ptr, &vg, dx);  //Now we know the error is here.
+	printf("bool mma_t::update 1.4\n");
 
 	subproblem.toMatlab();
-
+    printf("bool mma_t::update 2\n");
 	dx.swap(lastdx);
 
 	if (lastdx.norm() < 1e-3) {
@@ -46,7 +50,7 @@ bool mma_t::update(Scalar* dev_df, Scalar** dg, Scalar* dev_g)
 	if (stop_counter > 10) {
 		return true;
 	}
-
+    printf("bool mma_t::update 3\n");
 	return false;
 }
 

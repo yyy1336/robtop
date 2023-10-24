@@ -330,8 +330,11 @@ gv::gVector MMA::mma_subproblem_t::solveLinearSystem(
 std::pair<gv::Scalar, gv::Scalar> MMA::mma_subproblem_t::solve(gv::gVector* df, std::vector<gv::gVector*>& dg, gv::gVector* g, gv::gVector& dxResult)
 {
 	gv::gVector curx = mma.x;
+	printf("MMA::mma_subproblem_t::solve -1\n");
 
-	init(df, dg, g);
+	init(df, dg, g);  //Again now we know the error is here!
+    
+	printf("MMA::mma_subproblem_t::solve 0\n");
 
 	Scalar err = 1e30, lasterr = 0;
 
@@ -355,6 +358,8 @@ std::pair<gv::Scalar, gv::Scalar> MMA::mma_subproblem_t::solve(gv::gVector* df, 
 	int err_stays_counter = 0;
 
 	Scalar lambda_damp = 1;
+    
+	printf("MMA::mma_subproblem_t::solve 1\n");
 
 	while (mma.epsilon > 1e-6) {
 
@@ -481,10 +486,14 @@ std::pair<gv::Scalar, gv::Scalar> MMA::mma_subproblem_t::solve(gv::gVector* df, 
 
 		mma.epsilon *= 0.1;
 	}
+    
+	printf("MMA::mma_subproblem_t::solve 2\n");
 
 	gv::gVector cur_dx = mma.x - curx;
 
 	mma.adjust_asym(cur_dx, mma.lastdx);
+
+	printf("MMA::mma_subproblem_t::solve 3\n");
 
 	//cur_dx.toMatlab("cur_dx");
 	//mma.xmax.toMatlab("xmax");

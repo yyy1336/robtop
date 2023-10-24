@@ -176,3 +176,49 @@ void optimization(void) {
 modifiedPM中的change of force是什么，这难道不是有限元求解位移吗，为什么看起来像求解force，force变化很小时认为收敛。
 
 。。。，你看一下robtop论文的Algorithm 1就明白了。
+
+3.
+为什么不一样：
+```
+_gridlayer[0]->n_elements = 224028
+_gridlayer[0]->n_gselements = 224128
+```
+你看[0] Enumerating GS subset里e后面的数，括号里的8个数加起来=224128，括号外的加起来=224028。这应该是eight-color Gauss-Seidel relaxation，在homo3d的文章里有讲。
+
+4.
+test_utils.cpp: // #include "lib.cuh" //now we know that including a .cuh in .cpp is not recommended
+如果我就是想用lib.cuh里的函数，怎么办呢？ 用外部函数：extern double dump_array_sum(float* dump, size_t n);
+
+5.
+在testDistributeForceOpt()中使用updateDensities_MMA()时遇到的问题：
+计算体积约束及其导数：  
+尝试1：
+```
+		float gvalval = float(Vratio) / Vgoal - 1;
+		float* gval = &(gvalval);
+		float dvdx[grids[0]->n_gselements];
+		for(int i=0; i<grids[0]->n_gselements; i++){
+			dvdx[i] = 1 / (grids[0]->n_gselements * Vgoal);
+		}
+		float *dgdx[1] = {dvdx};
+    updateDensities_MMA(1, grids[0]->n_gselements, 1, 0, 1000, 1, itn,  grids[0]->getRho(), grids[0]->getSens(), gval, dgdx);
+```
+错误！gval和dgdx必须是GPU上的指针。  
+尝试2（作为尝试1的对照试验）：
+```
+		float *gval = grids[0]->getRho();
+		float *dgdx[1] = {gval}; 
+    updateDensities_MMA(1, grids[0]->n_gselements, 1, 0, 1000, 1, itn,  grids[0]->getRho(), grids[0]->getSens(), gval, dgdx);
+```
+可以正常使用MMA了。
+尝试3：
+```
+float* gval = (float*)grid::Grid::getTempBuf(sizeof(float));
+*(gval) = float(Vratio) / Vgoal - 1;
+```
+错误！ Segmentation fault (core dumped)。gval是GPU上的指针，不能直接用*(gval)操作其指向的内容。  
+在Host(CPU)和Device(GPU)间传递数据要用：
+```
+cudaMemcpy(dst, src, size, cudaMemcpyHostToDevice);
+cudaMemcpy(dst, src, size, cudaMemcpyDeviceToHost);
+```

@@ -18,6 +18,23 @@
 #include "openvdb_wrapper_t.h"
 #include "dir_utils.h"
 
+// #include "lib.cuh" //now we know that including a .cuh in .cpp is not recommended
+
+// #include "mmaOptimizer.h"
+// #include "culib2/lib.cuh"
+
+// using namespace homo;
+// using namespace culib2;
+
+extern void test_extern(void);
+extern void updateDensities_MMA(int nconstrain, int nvar, double a0, double a, double c, double d, int iter,  \
+                         float* x, float* dfdx, float* gval, float** dgdx);
+extern double dump_array_sum(float* dump, size_t n);
+template<typename T>
+extern double parallel_sum_d(const T* indata, double* dump, size_t array_size, T* sum_dst = nullptr);
+template<typename T>
+extern T parallel_maxabs(const T* indata, T* dump, size_t array_size, T* max_dst = nullptr);
+
 void aggregatedSystem(const std::vector<int>& loadnodes, Eigen::MatrixXd& C, double err_tol = 1e-2, Eigen::MatrixXd* pZ = nullptr);
 void setForce(Eigen::Matrix<double, -1, 1>& f);
 Eigen::Matrix<double, -1, 1> solveFem(void);
@@ -239,6 +256,9 @@ void userTest(void) {
 
 void TestSuit::testMain(const std::string& testname)
 {
+	printf("\n\033[33m-- test estern\n\033[0m");
+	test_extern();
+
 	if (testname == "" || testname == "None") return;
 
 	printf("\n\033[33m-- doing test on %s\n\033[0m", testname.c_str());
@@ -299,8 +319,11 @@ void TestSuit::testMain(const std::string& testname)
 	else if (testname == "testordtop") {
 		testOrdinaryTopopt();
 	}
-	else if (testname == "testdistributeforce") {
-		testDistributeForceOpt();
+	else if (testname == "testdistributeforce_OC") {
+		testDistributeForceOpt_OC();
+	}
+	else if (testname == "testdistributeforce_MMA") {
+		testDistributeForceOpt_MMA();
 	}
 	else if (testname == "testmodipm") {
 		testModifiedPM();
@@ -1039,7 +1062,7 @@ void TestSuit::testModifiedPMError(void)
 	}
 }
 
-void TestSuit::testDistributeForceOpt(void)
+void TestSuit::testDistributeForceOpt_MMA(void)
 {
 	// set force
 	grids[0]->reset_force();
@@ -1072,6 +1095,8 @@ void TestSuit::testDistributeForceOpt(void)
 	std::vector<float> tmodipm;
 
 	double Md = 1, MdThres = 0.08;
+
+	int ne = grids[0]->n_rho();
     
 	//
     // MMA::mma_t mma(grids[0]->n_gselements, 1);
@@ -1081,40 +1106,101 @@ void TestSuit::testDistributeForceOpt(void)
 	// gv::gVector dv(grids[0]->n_gselements, volScale / grids[0]->n_gselements);
 	// gv::gVector v(1, volScale*(1 - params.volume_ratio));
 
+    // MMAOptimizer mma(2, ne, 1, 0, 1000, 1);
+	// mma.setBound(0.001, 1);
 
-	while (itn++ < 100) {
+	while (itn++ < 1000) {
 		printf("\n* \033[32mITER %d \033[0m*\n", itn);
 		Vgoal *= (1 - params.volume_decrease);
+		// printf("volume_decrease = %f\n", params.volume_decrease);
 		Vc = Vgoal - params.volume_ratio;
 		if (Vgoal < params.volume_ratio) Vgoal = params.volume_ratio;
 
 		// printf("-- c_before = %6.4e\n", grids[0]->compliance());
 		// update numeric stencil after density changed
-		update_stencil();  //是否在此处计算有限元并更新了U？ 大概是吧。刚度矩阵K应该也在这儿跟更新吧，看来得大概。
+		update_stencil();  
+		// printf("-- c4 = %6.4e\n", grids[0]->compliance());
 		// solve displacement 
 		//double c = grids.solveFEM();
 		double rel_res = 1;
 		int femit = 0;
 		while (rel_res > 1e-2 && femit++ < 50) {
-			rel_res = grids.v_cycle(1, 1);
+			rel_res = grids.v_cycle(1, 1);  //Solving FEM and updating U here, but where to update K? maybe in update_stencil();
 		}
+		// printf("-- c5 = %6.4e\n", grids[0]->compliance());
 		double c = grids[0]->compliance();
 		printf("-- c = %6.4e   r = %4.2lf%%  md = %4.2lf%%\n", c, rel_res * 100, Md * 100);
 		// std::cout << grids[0]->getDisplacement() << std::endl;
 		if (isnan(c) || abs(c) < 1e-11) { printf("\033[31m-- Error compliance\033[0m\n"); exit(-1); }
 		cRecord.emplace_back(c); volRecord.emplace_back(Vgoal);
 		if (stop_check.update(c, &Vc) && Vgoal <= params.volume_ratio && Md < MdThres) break;
-		grids.log(itn);
+		if(itn % 10 == 0){
+			grids.log(itn);
+		}
 		// compute sensitivity
 		computeSensitivity();
+
+		// compute maximal sensitivity
+	    float* maxdump = (float*)grid::Grid::getTempBuf(sizeof(float)* ne / 100);
+	    float g_max = parallel_maxabs(grids[0]->getSens(), maxdump, ne);
+	    printf("[sensitivity] max = %f\n", g_max);
+		printf("Vgoal = %f\n", Vgoal);
+
 		// update density
-		updateDensities(Vgoal);
+		// updateDensities(Vgoal);
+
+        //  //update density using MMA
+		// // 计算体积分数
+		// // 方法1：nan，不知道为什么会错。 。。。你的rho值get了tempbuffer，都还没有赋值呢，你在求个什么东西？？？
+		// float* rho = (float*)grid::Grid::getTempBuf(sizeof(float)* ne);
+		// float Vratio = dump_array_sum(rho, ne) / ne;
+		// // 方法2：计算正确，但会修改grids[0]->getRho()指向的内容
+		// float* rho = grids[0]->getRho();
+		// float Vratio = dump_array_sum(rho, ne) / ne;
+		//方法3：正确
+		double* sum = (double*)grid::Grid::getTempBuf(sizeof(double) * ne / 100);
+	    double Vratio = parallel_sum_d(grids[0]->getRho(), sum, ne) / ne;
+		printf("Vtest: V = %f, n = %d \n", Vratio, ne);
+
+		// // get gval and dgdx for volfrac constrain
+		// // try1: maybe make error because of ptrs are not on gpu
+		// float gvalval = float(Vratio) / Vgoal - 1;
+		// float* gval = &(gvalval);
+		// float dvdx[ne];
+		// for(int i=0; i<ne; i++){
+		// 	dvdx[i] = 1 / (ne * Vgoal);
+		// }
+		// float *dgdx[1] = {dvdx};
+        // // try2: as a contrast, it makes no error
+		// float *gval = grids[0]->getRho();
+		// float *dgdx[1] = {gval}; 
+        
+		float vol_scale = 1.f;
+		float* gval = (float*)grid::Grid::getTempBuf(sizeof(float));
+		float gvalval[1] = {vol_scale * (float(Vratio) / Vgoal - 1)};
+		cudaMemcpy(gval, gvalval, sizeof(float), cudaMemcpyHostToDevice);
+
+		float dvdx_Host[ne];
+		for(int i=0; i<ne; i++){
+			dvdx_Host[i] = vol_scale / (ne * Vgoal);
+		}
+		float* dvdx = (float*)grid::Grid::getTempBuf(sizeof(float) * ne);
+		cudaMemcpy(dvdx, dvdx_Host, ne*sizeof(float), cudaMemcpyHostToDevice);
+        float* dgdx[1] = {dvdx};
+		
+		// // test dvdx:
+		// float dvdx_Host2[ne];
+		// cudaMemcpy(dvdx_Host2, dvdx, ne*sizeof(float), cudaMemcpyDeviceToHost);
+		// for(int i=0; i<ne; i++){
+		// 	printf("%f\n",dvdx_Host2[i]);
+		// }
+		updateDensities_MMA(1, ne, 1, 0, 1000, 1, itn,  grids[0]->getRho(), grids[0]->getSens(), gval, dgdx);
 		
 
 		// // compute volume
 		// double vol = grids[0]->volumeRatio();
 		// v[0] = volScale * (vol - params.volume_ratio);
-		// scaleVector(grids[0]->getSens(), grids[0]->n_gselements, sensScale);
+		// scaleVector(grids[0]->getSens(), ne, sensScale);
         
 		// printf("11111111111111\n");
 		// mma.update(grids[0]->getSens(), &dv.data(), v.data());
@@ -1137,6 +1223,92 @@ void TestSuit::testDistributeForceOpt(void)
 
 	// write volume record during optimization
 	bio::write_vector(grids.getPath("vrec"), volRecord);
+
+}
+
+void TestSuit::testDistributeForceOpt_OC(void)
+{
+	// set force
+	grids[0]->reset_force();
+	//setForceSupport(getPreloadForce(), grids[0]->getForce());
+	setForceSupport(getForceNormal(), grids[0]->getForce());
+
+	if (!grids.hasSupport()) {
+		forceProject(grids[0]->getForce());
+	}
+
+	grids.writeSupportForce(grids.getPath("fs"));
+
+#if 1
+	// initDensities(params.volume_ratio);
+	initDesignVaribles(params.volume_ratio);
+	float Vgoal = params.volume_ratio;
+#else
+	initDensities(1);
+	float Vgoal = 1;
+#endif
+
+	int itn = 0;
+
+	snippet::converge_criteria stop_check(1, 2, 5e-3);
+
+	std::vector<double> cRecord, volRecord;
+
+	double Vc = Vgoal - params.volume_ratio;
+
+	std::vector<float> tmodipm;
+
+	double Md = 1, MdThres = 0.08;
+
+	int ne = grids[0]->n_rho();
+
+
+	while (itn++ < 100) {
+		printf("\n* \033[32mITER %d \033[0m*\n", itn);
+		Vgoal *= (1 - params.volume_decrease);
+		Vc = Vgoal - params.volume_ratio;
+		if (Vgoal < params.volume_ratio) Vgoal = params.volume_ratio;
+		// update numeric stencil after density changed
+		update_stencil();
+		// solve displacement 
+		//double c = grids.solveFEM();
+		double rel_res = 1;
+		int femit = 0;
+		while (rel_res > 1e-2 && femit++ < 50) {
+			rel_res = grids.v_cycle(1, 1);
+		}
+		double c = grids[0]->compliance();
+		printf("-- c = %6.4e   r = %4.2lf%%  md = %4.2lf%%\n", c, rel_res * 100, Md * 100);
+		if (isnan(c) || abs(c) < 1e-11) { printf("\033[31m-- Error compliance\033[0m\n"); exit(-1); }
+		cRecord.emplace_back(c); volRecord.emplace_back(Vgoal);
+		if (stop_check.update(c, &Vc) && Vgoal <= params.volume_ratio && Md < MdThres) break;
+		grids.log(itn);
+		// compute sensitivity
+		computeSensitivity();
+		double* sum = (double*)grid::Grid::getTempBuf(sizeof(double) * ne / 100);
+	    double Vratio = parallel_sum_d(grids[0]->getRho(), sum, ne) / ne;
+		printf("Vtest: V = %f, n = %d \n", Vratio, ne);
+
+		// update density
+		updateDensities(Vgoal);
+
+		Md = grids[0]->densityDiscretiness();
+	}
+
+    printf("\n=   finished???   =\n");
+
+	// write result density field
+	// grids.writeDensity(grids.getPath("out.vdb"));
+	grids.writeDensity2txt(grids.getPath("out.txt"));
+
+	printf("\n=   finished.   =\n");
+    
+	// write worst compliance record during optimization 
+	bio::write_vector(grids.getPath("c"), cRecord);
+
+	// write volume record during optimization
+	bio::write_vector(grids.getPath("vrec"), volRecord);
+
 
 }
 
@@ -1826,6 +1998,7 @@ void TestSuit::testtest2011(void)
 		gpu_manager_t::pass_dev_buf_to_matlab("sens", grids[0]->getSens(), grids[0]->n_gselements);
 
 		mma.update(grids[0]->getSens(), &dv.data(), v.data());
+		printf("mma.update finished\n");
 
 		// DEBUG
 		if (itn % 5 == 0) {

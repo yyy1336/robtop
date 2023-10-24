@@ -19,6 +19,7 @@ struct Parameter {
 	int gridreso;
 	float youngs_modulu;
 	float poisson_ratio;
+	int cloak; //0,1,2
 };
 
 extern Parameter params;
@@ -31,7 +32,7 @@ void logParams(std::string file, std::string version_str, int argc, char** argv)
 
 void setParameters(
 	float volRatio, float volDecrease, float designStep, float filterRadi, float dampRatio, float powerPenal,
-	float min_density, int gridreso, float youngs_modulu, float poisson_ratio, float shell_width,
+	float min_density, int gridreso, float youngs_modulu, float poisson_ratio, int cloak, float shell_width,
 	bool logdensity, bool logcompliance);
 
 void setOutpurDir(const std::string& dirname);
