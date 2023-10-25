@@ -1345,6 +1345,151 @@ _blocksum:
 
 }
 
+
+// map 32 vertices to 8 warp, each warp use specific neighbor element (density rho_i)
+template<int BlockSize = 32 * 8>
+__global__ void gs_relax_OTFA_NS_kernel_cloak1(int nv_gs, int gs_offset, float* rholist, float* c11list, float* c12list, float* c44list) {
+	int tid = blockIdx.x*blockDim.x + threadIdx.x;
+
+	//int mode = gmode[0];
+
+	__shared__ double KE11[24][24]; 
+	__shared__ double KE12[24][24]; 
+	__shared__ double KE44[24][24]; 
+
+	__shared__ double sumKeU[3][4][32];
+
+	__shared__ double sumS[9][4][32];
+
+	// load template matrix from constant memory to shared memory
+	loadTemplateMatrix(KE11,1);
+	loadTemplateMatrix(KE12,2);
+	loadTemplateMatrix(KE44,3);
+
+	int warpId = threadIdx.x / 32;
+	int warpTid = threadIdx.x % 32;
+
+	double KeU[3] = { 0. };
+	double S[9] = { 0. };
+	double* pU[3] = { gU[0],gU[1],gU[2] };
+
+	bool invalid_node = false;
+	// the id in a gs subset
+	int vid = blockIdx.x * 32 + warpTid;
+
+	// the id in total node set
+	vid += gs_offset;
+
+	int vi = 7 - warpId;
+	double penalty = 0;
+	double c11 = 0;
+	double c12 = 0;
+	double c44 = 0;
+	int eid;
+
+	int flag = gVflag[0][vid];
+	invalid_node |= flag & Grid::Bitmask::mask_invalid;
+
+	if (invalid_node) goto _blocksum;
+
+	eid = gV2E[warpId][vid];
+
+	if (eid != -1){
+		penalty = powf(rholist[eid], power_penalty[0]);
+		c11 = c11list[eid];
+		c12 = c12list[eid];
+		c44 = c44list[eid];
+	}
+	else
+		goto _blocksum;
+
+	if (gV2V[13][vid] == -1) {
+		invalid_node = true;
+		goto _blocksum;
+	}
+
+	// compute KU and S 
+	for (int vj = 0; vj < 8; vj++) {
+		// vjpos = epos + vjoffset
+		int vjpos[3] = {
+			vj % 2 + warpId % 2,
+			vj % 4 / 2 + warpId % 4 / 2,
+			vj / 4 + warpId / 4
+		};
+		int vj_lid = vjpos[0] + vjpos[1] * 3 + vjpos[2] * 9;
+		int vj_vid = gV2V[vj_lid][vid];
+		if (vj_vid == -1) continue;
+		double U[3] = { pU[0][vj_vid],pU[1][vj_vid],pU[2][vj_vid] };
+		if (vj_lid != 13) {
+			for (int k = 0; k < 3; k++) {
+				for (int j = 0; j < 3; j++) {
+					KeU[k] += penalty * (c11 * KE11[k + vi * 3][j + vj * 3] * U[j] + \
+					c12 * KE12[k + vi * 3][j + vj * 3] * U[j] + c44 * KE44[k + vi * 3][j + vj * 3] * U[j]);
+				}
+			}
+		}
+		if (vj_lid == 13) {
+			for (int i = 0; i < 9; i++) {
+				S[i] = penalty * (c11 * KE11[vi * 3 + i / 3][vi * 3 + i % 3] + \
+				c12 * KE12[vi * 3 + i / 3][vi * 3 + i % 3] + c44 * KE44[vi * 3 + i / 3][vi * 3 + i % 3]);
+			}
+		}
+	}
+
+_blocksum:
+
+	if (warpId >= 4) {
+		for (int i = 0; i < 3; i++) {
+			sumKeU[i][warpId - 4][warpTid] = KeU[i];
+		}
+		for (int i = 0; i < 9; i++) {
+			sumS[i][warpId - 4][warpTid] = S[i];
+		}
+	}
+	__syncthreads();
+
+	if (warpId < 4) {
+		for (int i = 0; i < 3; i++) {
+			sumKeU[i][warpId][warpTid] += KeU[i];
+		}
+		for (int i = 0; i < 9; i++) {
+			sumS[i][warpId][warpTid] += S[i];
+		}
+	}
+	__syncthreads();
+
+	if (warpId < 2) {
+		for (int i = 0; i < 3; i++) {
+			sumKeU[i][warpId][warpTid] += sumKeU[i][warpId + 2][warpTid];
+		}
+		for (int i = 0; i < 9; i++) {
+			sumS[i][warpId][warpTid] += sumS[i][warpId + 2][warpTid];
+		}
+	}
+	__syncthreads();
+
+	if (warpId < 1 && !invalid_node) {
+		for (int i = 0; i < 3; i++) {
+			KeU[i] = sumKeU[i][0][warpTid] + sumKeU[i][1][warpTid];
+		}
+		for (int i = 0; i < 9; i++) {
+			S[i] = sumS[i][0][warpTid] + sumS[i][1][warpTid];
+		}
+
+		double newU[3] = { pU[0][vid],pU[1][vid],pU[2][vid] };
+		double(*s)[3] = reinterpret_cast<double(*)[3]>(S);
+		// s[][] is row major 
+		newU[0] = (gF[0][vid] - s[0][1] * newU[1] - s[0][2] * newU[2] - KeU[0]) / s[0][0];
+		newU[1] = (gF[1][vid] - s[1][0] * newU[0] - s[1][2] * newU[2] - KeU[1]) / s[1][1];
+		newU[2] = (gF[2][vid] - s[2][0] * newU[0] - s[2][1] * newU[1] - KeU[2]) / s[2][2];
+		pU[0][vid] = newU[0]; pU[1][vid] = newU[1]; pU[2][vid] = newU[2];
+
+	}
+
+
+}
+
+
 // map 32 vertices to 8 warp, each warp use specific neighbor element (density rho_i)
 template<int BlockSize = 32 * 8>
 __global__ void gs_relax_OTFA_WS_kernel(int nv_gs, int gs_offset, float* rholist) {
@@ -1491,6 +1636,167 @@ _blocksum:
 
 }
 
+// map 32 vertices to 8 warp, each warp use specific neighbor element (density rho_i)
+template<int BlockSize = 32 * 8>
+__global__ void gs_relax_OTFA_WS_kernel_cloak1(int nv_gs, int gs_offset, float* rholist, float* c11list, float* c12list, float* c44list) {
+	int tid = blockIdx.x*blockDim.x + threadIdx.x;
+
+	__shared__ double KE11[24][24]; 
+	__shared__ double KE12[24][24]; 
+	__shared__ double KE44[24][24]; 
+
+	__shared__ double sumKeU[3][4][32];
+
+	__shared__ double sumS[9][4][32];
+
+	// load template matrix from constant memory to shared memory
+	loadTemplateMatrix(KE11,1);
+	loadTemplateMatrix(KE12,2);
+	loadTemplateMatrix(KE44,3);
+
+	int warpId = threadIdx.x / 32;
+	int warpTid = threadIdx.x % 32;
+
+	double KeU[3] = { 0. };
+	double S[9] = { 0. };
+	double* pU[3] = { gU[0],gU[1],gU[2] };
+
+	bool invalid_node = false;
+	// the id in a gs subset
+	int vid = blockIdx.x * 32 + warpTid;
+
+	// the id in total node set
+	vid += gs_offset;
+
+	int flag = gVflag[0][vid];
+	int eid;
+	double penalty = 0;
+	double c11 = 0;
+	double c12 = 0;
+	double c44 = 0;
+	int vi = 7 - warpId;
+	bool viisfix;
+	int* pflags;
+
+	invalid_node |= flag & Grid::Bitmask::mask_invalid;
+	if (invalid_node) goto _blocksum;
+
+	eid = gV2E[warpId][vid];
+
+	if (eid != -1){
+		penalty = powf(rholist[eid], power_penalty[0]);
+		c11 = c11list[eid];
+		c12 = c12list[eid];
+		c44 = c44list[eid];
+	}
+	else
+		goto _blocksum;
+
+	if (gV2V[13][vid] == -1) {
+		invalid_node = true;
+		goto _blocksum;
+	}
+
+	viisfix = flag & grid::Grid::Bitmask::mask_supportnodes;
+
+	pflags = gVflag[0];
+
+	// compute KU and S 
+	for (int vj = 0; vj < 8; vj++) {
+		// vjpos = epos + vjoffset
+		int vjpos[3] = {
+			vj % 2 + warpId % 2,
+			vj % 4 / 2 + warpId % 4 / 2,
+			vj / 4 + warpId / 4
+		};
+		int vj_lid = vjpos[0] + vjpos[1] * 3 + vjpos[2] * 9;
+		int vj_vid = gV2V[vj_lid][vid];
+		if (vj_vid == -1) continue;
+		double U[3] = { pU[0][vj_vid],pU[1][vj_vid],pU[2][vj_vid] };
+
+		// deal with fixed boundary
+		int vjflag = pflags[vj_vid];
+		bool vjisfix = vjflag & grid::Grid::Bitmask::mask_supportnodes;
+
+		if (vj_lid != 13 && !vjisfix) {
+			for (int k = 0; k < 3; k++) {
+				for (int j = 0; j < 3; j++) {
+					KeU[k] += penalty * (c11 * KE11[k + vi * 3][j + vj * 3] * U[j] + \
+					c12 * KE12[k + vi * 3][j + vj * 3] * U[j] + c44 * KE44[k + vi * 3][j + vj * 3] * U[j]);
+				}
+			}
+		}
+		if (vj_lid == 13) {
+			if (!vjisfix) {
+				for (int i = 0; i < 9; i++) {
+					S[i] = penalty * (c11 * KE11[vi * 3 + i / 3][vi * 3 + i % 3] + \
+					c12 * KE12[vi * 3 + i / 3][vi * 3 + i % 3] + c44 * KE44[vi * 3 + i / 3][vi * 3 + i % 3]);
+				}
+			}
+			else {
+				S[0] = 1; S[4] = 1; S[8] = 1;
+			}
+		}
+	}
+
+	if (viisfix) {
+		KeU[0] = 0; KeU[1] = 0; KeU[2] = 0;
+	}
+
+_blocksum:
+
+	if (warpId >= 4) {
+		for (int i = 0; i < 3; i++) {
+			sumKeU[i][warpId - 4][warpTid] = KeU[i];
+		}
+		for (int i = 0; i < 9; i++) {
+			sumS[i][warpId - 4][warpTid] = S[i];
+		}
+	}
+	__syncthreads();
+
+	if (warpId < 4) {
+		for (int i = 0; i < 3; i++) {
+			sumKeU[i][warpId][warpTid] += KeU[i];
+		}
+		for (int i = 0; i < 9; i++) {
+			sumS[i][warpId][warpTid] += S[i];
+		}
+	}
+	__syncthreads();
+
+	if (warpId < 2) {
+		for (int i = 0; i < 3; i++) {
+			sumKeU[i][warpId][warpTid] += sumKeU[i][warpId + 2][warpTid];
+		}
+		for (int i = 0; i < 9; i++) {
+			sumS[i][warpId][warpTid] += sumS[i][warpId + 2][warpTid];
+		}
+	}
+	__syncthreads();
+
+	if (warpId < 1 && !invalid_node) {
+		for (int i = 0; i < 3; i++) {
+			KeU[i] = sumKeU[i][0][warpTid] + sumKeU[i][1][warpTid];
+		}
+		for (int i = 0; i < 9; i++) {
+			S[i] = sumS[i][0][warpTid] + sumS[i][1][warpTid];
+		}
+
+		double newU[3] = { pU[0][vid],pU[1][vid],pU[2][vid] };
+		double(*s)[3] = reinterpret_cast<double(*)[3]>(S);
+		// s[][] is row major 
+		newU[0] = (gF[0][vid] - s[0][1] * newU[1] - s[0][2] * newU[2] - KeU[0]) / s[0][0];
+		newU[1] = (gF[1][vid] - s[1][0] * newU[0] - s[1][2] * newU[2] - KeU[1]) / s[1][1];
+		newU[2] = (gF[2][vid] - s[2][0] * newU[0] - s[2][1] * newU[1] - KeU[2]) / s[2][2];
+		pU[0][vid] = newU[0]; pU[1][vid] = newU[1]; pU[2][vid] = newU[2];
+
+	}
+
+}
+
+
+
 void Grid::gs_relax(int n_times)
 {
 	if (is_dummy()) return;
@@ -1504,10 +1810,24 @@ void Grid::gs_relax(int n_times)
 				size_t grid_size, block_size;
 				make_kernel_param(&grid_size, &block_size, gs_num[i] * 8, BlockSize);
 				if (_mode == no_support_constrain_force_direction || _mode == no_support_free_force) {
-					gs_relax_OTFA_NS_kernel<BlockSize> << <grid_size, block_size >> > (gs_num[i], gs_offset, _gbuf.rho_e);
+					if(gridparams.cloak == 0){
+			            printf("gs_relax_OTFA_NS_kernel\n");
+		                gs_relax_OTFA_NS_kernel<BlockSize> << <grid_size, block_size >> > (gs_num[i], gs_offset, _gbuf.rho_e);
+		            }
+		            else if(gridparams.cloak == 1){
+			            printf("gs_relax_OTFA_NS_kernel_cloak1\n");
+		                gs_relax_OTFA_NS_kernel_cloak1<BlockSize> << <grid_size, block_size >> > (gs_num[i], gs_offset, _gbuf.rho_e, _gbuf.C11_e, _gbuf.C12_e, _gbuf.C44_e);
+		            }           
 				}
 				else if (_mode == with_support_constrain_force_direction || _mode == with_support_free_force) {
-					gs_relax_OTFA_WS_kernel<BlockSize> << <grid_size, block_size >> > (gs_num[i], gs_offset, _gbuf.rho_e);
+					if(gridparams.cloak == 0){
+			            printf("gs_relax_OTFA_WS_kernel\n");
+		                gs_relax_OTFA_WS_kernel<BlockSize> << <grid_size, block_size >> > (gs_num[i], gs_offset, _gbuf.rho_e);
+		            }
+		            else if(gridparams.cloak == 1){
+			            printf("gs_relax_OTFA_WS_kernel_cloak1\n");
+		                gs_relax_OTFA_WS_kernel_cloak1<BlockSize> << <grid_size, block_size >> > (gs_num[i], gs_offset, _gbuf.rho_e, _gbuf.C11_e, _gbuf.C12_e, _gbuf.C44_e);
+		            }   
 				}
 				//cudaDeviceSynchronize();
 				//cuda_error_check;
@@ -2165,6 +2485,100 @@ __global__ void update_residual_OTFA_WS_kernel_1(int nv, float* rholist) {
 			for (int row = 0; row < 3; row++) {
 				for (int col = 0; col < 3; col++) {
 					KeU[row] += penalty * KE[row + vi * 3][col + vj * 3] * u[col];
+				}
+			}
+		}
+	}
+
+__blocksum:
+	if (warpId >= 4) {
+		for (int i = 0; i < 3; i++) { sumKeU[i][warpId - 4][warpTid] = KeU[i]; }
+	}
+	__syncthreads();
+
+	if (warpId < 4) {
+		for (int i = 0; i < 3; i++) { sumKeU[i][warpId][warpTid] += KeU[i]; }
+	}
+	__syncthreads();
+
+	if (warpId < 2) {
+		for (int i = 0; i < 3; i++) { sumKeU[i][warpId][warpTid] += sumKeU[i][warpId + 2][warpTid]; }
+	}
+	__syncthreads();
+
+	if (warpId < 1 && v2v[13] != -1) {
+		for (int i = 0; i < 3; i++) { KeU[i] = sumKeU[i][0][warpTid] + sumKeU[i][1][warpTid]; }
+
+		if (vfix[13]) { KeU[0] = 0; KeU[1] = 0; KeU[2] = 0; }
+		
+		for (int i = 0; i < 3; i++) { gR[i][vid] = gF[i][vid] - KeU[i]; }
+	}
+}
+
+
+template<int SetBlockSize = 32 * 8>
+__global__ void update_residual_OTFA_WS_kernel_1_cloak1(int nv, float* rholist, float* c11list, float* c12list, float* c44list) {
+
+	__shared__ double KE11[24][24]; 
+	__shared__ double KE12[24][24]; 
+	__shared__ double KE44[24][24]; 
+	__shared__ double sumKeU[3][4][32];
+
+	int tid = blockIdx.x*blockDim.x + threadIdx.x;
+
+	loadTemplateMatrix(KE11,1);
+	loadTemplateMatrix(KE12,2);
+	loadTemplateMatrix(KE44,3);
+
+	int warpId = threadIdx.x / 32;
+	int warpTid = threadIdx.x % 32;
+
+	double KeU[3] = { 0.,0.,0. };
+
+	float power = power_penalty[0];
+
+	int vid = blockIdx.x * 32 + warpTid;
+
+	// add fixed flag check
+	bool vfix[27], vload[27];
+	int v2v[27];
+
+	if (vid >= nv) goto __blocksum;
+
+	loadNeighborNodesAndFlags(vid, v2v, vfix, vload);
+
+	// sum a element
+	{
+		int i = warpId;
+		int eid = gV2E[i][vid];
+		double penalty;
+		int vi = 7 - i;
+		if (eid == -1) goto __blocksum;
+		penalty = powf(rholist[eid], power);
+		double c11 = c11list[eid];
+		double c12 = c12list[eid];
+		double c44 = c44list[eid];
+		for (int vj = 0; vj < 8; vj++) {
+			int vjpos[3] = {
+				vj % 2 + i % 2,
+				vj % 4 / 2 + i % 4 / 2,
+				vj / 4 + i / 4
+			};
+			int vj_lid = vjpos[0] + vjpos[1] * 3 + vjpos[2] * 9;
+			int vj_vid = v2v[vj_lid];
+			if (vj_vid == -1) {
+				// DEBUG
+				printf("-- error in update residual otfa\n");
+				continue;
+			}
+			double u[3] = { gU[0][vj_vid],gU[1][vj_vid],gU[2][vj_vid] };
+			if (vfix[vj_lid]) {
+				u[0] = 0; u[1] = 0; u[2] = 0;
+			}
+			for (int row = 0; row < 3; row++) {
+				for (int col = 0; col < 3; col++) {
+					KeU[row] += penalty * (c11 * KE11[row + vi * 3][col + vj * 3] * u[col] + \
+					c12 * KE12[row + vi * 3][col + vj * 3] * u[col] + c44 * KE44[row + vi * 3][col + vj * 3] * u[col]);
 				}
 			}
 		}
@@ -3127,6 +3541,95 @@ __writef:
 	}
 }
 
+
+__global__ void applyK_OTFA_kernel_cloak1(int nv, devArray_t<double*, 3> u, devArray_t<double*, 3> f, float* rholist, float*c11list, float* c12list, float* c44list, bool use_support = true) {
+	int tid = blockIdx.x*blockDim.x + threadIdx.x;
+
+	//int mode = gmode[0];
+
+	__shared__ double KE11[24][24]; 
+	__shared__ double KE12[24][24]; 
+	__shared__ double KE44[24][24]; 
+
+	// load template matrix from constant memory to shared memory
+	loadTemplateMatrix(KE11,1);
+	loadTemplateMatrix(KE12,2);
+	loadTemplateMatrix(KE44,3);
+
+	int vid = blockIdx.x * blockDim.x + threadIdx.x;
+
+	if (tid >= nv) return;
+
+	double KeU[3] = { 0. };
+
+	double* pU[3] = { u[0],u[1],u[2] };
+
+	float power = power_penalty[0];
+
+	bool vifix = false;
+
+	int viflag;
+
+	if (!isValidNode(vid)) goto __writef;
+
+	if (use_support) {
+		viflag = gVflag[0][vid];
+		vifix = viflag & grid::Grid::Bitmask::mask_supportnodes;
+		if (vifix) {
+			goto __writef;
+		}
+	}
+
+	for (int e = 0; e < 8; e++) {
+
+		int vi = 7 - e;
+
+		int eid = gV2E[e][vid];
+
+		if (eid == -1) continue;
+
+		double penalty = powf(rholist[eid], power);
+		double c11 = c11list[eid];
+		double c12 = c12list[eid];
+		double c44 = c44list[eid];
+
+		for (int vj = 0; vj < 8; vj++) {
+			int vjpos[3] = {
+				vj % 2 + e % 2,
+				vj % 4 / 2 + e % 4 / 2,
+				vj / 4 + e / 4
+			};
+			int vj_lid = vjpos[0] + vjpos[1] * 3 + vjpos[2] * 9;
+			int vj_vid = gV2V[vj_lid][vid];
+			if (vj_vid == -1) continue;
+
+			double u_vj[3] = { pU[0][vj_vid],pU[1][vj_vid],pU[2][vj_vid] };
+
+			if (use_support) {
+				int vjflag = gVflag[0][vj_vid];
+				if (vjflag & grid::Grid::Bitmask::mask_supportnodes) {
+					u_vj[0] = 0; u_vj[1] = 0; u_vj[2] = 0;
+				}
+			}
+
+			for (int k = 0; k < 3; k++) {
+				for (int j = 0; j < 3; j++) {
+					KeU[k] += penalty * (c11 * KE11[k + vi * 3][j + vj * 3] * u_vj[j] + \
+					c12 * KE12[k + vi * 3][j + vj * 3] * u_vj[j] + c44 * KE44[k + vi * 3][j + vj * 3] * u_vj[j]);
+				}
+			}
+		}
+	}
+
+__writef:
+	for (int i = 0; i < 3; i++) {
+		if (use_support && vifix) {
+			KeU[i] = gU[i][vid];
+		}
+		f[i][vid] = KeU[i];
+	}
+}
+
 void Grid::applyK(double* u[3], double* f[3])
 {
 	use_grid();
@@ -3135,7 +3638,15 @@ void Grid::applyK(double* u[3], double* f[3])
 		devArray_t<double*, 3> flist{ f[0],f[1],f[2] };
 		size_t grid_size, block_size;
 		make_kernel_param(&grid_size, &block_size, n_gsvertices, 512);
-		applyK_OTFA_kernel << <grid_size, block_size >> > (n_gsvertices, ulist, flist, _gbuf.rho_e);
+		if(gridparams.cloak == 0){
+			printf("applyK_OTFA_kernel\n");
+			applyK_OTFA_kernel << <grid_size, block_size >> > (n_gsvertices, ulist, flist, _gbuf.rho_e);
+		}
+		if(gridparams.cloak == 1 || gridparams.cloak == 2){
+			printf("applyK_OTFA_kernel_cloak1\n");
+			applyK_OTFA_kernel_cloak1 << <grid_size, block_size >> > (n_gsvertices, ulist, flist, _gbuf.rho_e, _gbuf.C11_e, _gbuf.C12_e, _gbuf.C44_e);
+		}
+		
 		cudaDeviceSynchronize();
 		cuda_error_check;
 	}
@@ -3942,6 +4453,128 @@ __global__ void apply_adjointK_kernel(int nv, float* rholist,
 	for (int i = 0; i < 3; i++) { fdst[i][vid] = KU[i]; }
 }
 
+
+__global__ void apply_adjointK_kernel_cloak1(int nv, float* rholist, float* c11list, float* c12list, float* c44list,
+	devArray_t<double*, 3> usrc, devArray_t<double*, 3> fdst,
+	gBitSAT<unsigned int> vloadsat, bool use_support, bool constrain_force
+) {
+	__shared__ double KE11[24][24]; 
+	__shared__ double KE12[24][24]; 
+	__shared__ double KE44[24][24]; 
+
+	int tid = blockIdx.x*blockDim.x + threadIdx.x;
+
+	loadTemplateMatrix(KE11,1);
+	loadTemplateMatrix(KE12,2);
+	loadTemplateMatrix(KE44,3);
+
+	if (tid >= nv) return;
+
+	int vid = tid;
+
+	int mode = gmode[0];
+
+	// load flag and neighbor ids
+	bool vfix[27], vload[27];
+	int v2v[27];
+	loadNeighborNodesAndFlags(vid, v2v, vfix, vload);
+
+	double vitan[2][3] = { 0. };
+
+	double KU[3] = { 0.,0.,0. };
+	float power = power_penalty[0];
+	for (int i = 0; i < 8; i++) {
+		int eid = gV2E[i][vid];
+		if (eid == -1) continue;
+		double penalty = powf(rholist[eid], power);
+		double c11 = c11list[eid];
+		double c12 = c12list[eid];
+		double c44 = c44list[eid];
+
+		// vertex id in i-th neighbor element
+		int vi = 7 - i;
+
+		//double KeU[3] = { 0. };
+		// traverse other vertex of neighbor element, and compute KeU
+		for (int vj = 0; vj < 8; vj++) {
+			int vjpos[3] = {
+				vj % 2 + i % 2,
+				vj % 4 / 2 + i % 4 / 2,
+				vj / 4 + i / 4
+			};
+			int vj_lid = vjpos[0] + vjpos[1] * 3 + vjpos[2] * 9;
+			int vj_vid = v2v[vj_lid];
+			if (vj_vid == -1) {
+				// DEBUG
+				printf("-- error in update residual otfa\n");
+				continue;
+			}
+
+			// check if vj is a load node, and load the tangent vectors if it its
+			bool vjisload = vload[vj_lid];
+			bool vjisfix = vfix[vj_lid];
+			double vtan[2][3];
+			if (vjisload) {
+				int vjloadid = vloadsat(vj_vid); if (vjloadid == -1) printf("-- error on node %d\n", vj_vid);
+				for (int k1 = 0; k1 < 2; k1++)
+					for (int k2 = 0; k2 < 3; k2++) vtan[k1][k2] = gLoadtangent[k1][k2][vjloadid];
+				// set viload if vj is vi
+				if (vj_lid == 13) {
+					for (int k1 = 0; k1 < 2; k1++)
+						for (int k2 = 0; k2 < 3; k2++) vitan[k1][k2] = vtan[k1][k2];
+				}
+			}
+
+			// fetch displacement
+			double u[3] = { usrc[0][vj_vid],usrc[1][vj_vid],usrc[2][vj_vid] };
+
+			if (vjisfix && use_support) {
+				u[0] = 0; u[1] = 0; u[2] = 0;
+			}
+
+			// multiply N^T on u if vj is load node
+			if (vjisload ) {
+				if (constrain_force) {
+					double Nu[3];
+					for (int k = 0; k < 3; k++) Nu[k] = vtan[0][k] * u[0] + vtan[1][k] * u[1];
+					for (int k = 0; k < 3; k++) u[k] = Nu[k];
+				}
+				else {
+					u[0] = 0; u[1] = 0; u[2] = 0;
+				}
+			}
+
+			for (int row = 0; row < 3; row++) {
+				for (int col = 0; col < 3; col++) {
+					KU[row] += penalty * (c11 * KE11[row + vi * 3][col + vj * 3] * u[col] + \
+					c12 * KE12[row + vi * 3][col + vj * 3] * u[col] + c44 * KE44[row + vi * 3][col + vj * 3] * u[col]);
+				}
+			}
+		}
+
+	}
+	// check whether vi is load node, multiply N if true
+	if (vload[13] ) {
+		if (constrain_force) {
+			double ku[2] = { 0. };
+			for (int k = 0; k < 3; k++) {
+				ku[0] += vitan[0][k] * KU[k];
+				ku[1] += vitan[1][k] * KU[k];
+			}
+			KU[0] = ku[0]; KU[1] = ku[1]; KU[2] = 0;
+		}
+		else {
+			KU[0] = 0; KU[1] = 0; KU[2] = 0;
+		}
+	}
+
+	// vi is fix
+	if (vfix[13] && use_support) { KU[0] = 0; KU[1] = 0; KU[2] = 0; }
+
+	for (int i = 0; i < 3; i++) { fdst[i][vid] = KU[i]; }
+}
+
+
 void grid::Grid::applyAjointK(double* usrc[3], double* fdst[3])
 {
 	use_grid();
@@ -3951,9 +4584,15 @@ void grid::Grid::applyAjointK(double* usrc[3], double* fdst[3])
 	devArray_t<double*, 3> fd{ fdst[0],fdst[1],fdst[2] };
 	size_t grid_size, block_size;
 	make_kernel_param(&grid_size, &block_size, n_gsvertices, 512);
-	apply_adjointK_kernel<<<grid_size,block_size>>>(n_gsvertices, _gbuf.rho_e,
-		us, fd, vid2loadid, use_support, constrain_force
-	);
+	if(gridparams.cloak == 0){
+		printf("apply_adjointK_kernel\n");
+		apply_adjointK_kernel<<<grid_size,block_size>>>(n_gsvertices, _gbuf.rho_e, us, fd, vid2loadid, use_support, constrain_force);
+	}
+	else if(gridparams.cloak == 1 || gridparams.cloak == 2){
+		printf("apply_adjointK_kernel_cloak1\n");
+		apply_adjointK_kernel_cloak1<<<grid_size,block_size>>>(n_gsvertices, _gbuf.rho_e, _gbuf.C11_e, _gbuf.C12_e, _gbuf.C44_e, us, fd, vid2loadid, use_support, constrain_force);
+	}
+	
 	cudaDeviceSynchronize();
 	cuda_error_check;
 }
@@ -4099,6 +4738,58 @@ __global__ void elementCompliance_kernel(int nv, devArray_t<double*, 3> ulist, d
 	
 }
 
+__global__ void elementCompliance_kernel_cloak1(int nv, devArray_t<double*, 3> ulist, devArray_t<double*, 3> flist, float* rholist, float* c11list, float* c12list, float* c44list, float* clist) {
+	int tid = blockDim.x * blockIdx.x + threadIdx.x;
+
+	__shared__ double KE11[24][24]; 
+	__shared__ double KE12[24][24]; 
+	__shared__ double KE44[24][24]; 
+
+	loadTemplateMatrix(KE11,1);
+	loadTemplateMatrix(KE12,2);
+	loadTemplateMatrix(KE44,3);
+
+	if (tid >= nv) return;
+
+	int v2v[27];
+
+	loadNeighborNodes(tid, v2v);
+
+	float power = power_penalty[0];
+
+	for (int e = 0; e < 8; e++) {
+		int vi = 7 - e;
+		int eid = gV2E[e][tid];
+		if (eid == -1) continue;
+		float penal = powf(rholist[eid], power);
+		float c11 = c11list[eid];
+		float c12 = c12list[eid];
+		float c44 = c44list[eid];
+		double KeU[3] = { 0,0,0 };
+		for (int vj = 0; vj < 8; vj++) {
+			int vjpos[3] = { e % 2 + vj % 2, e / 2 % 2 + vj / 2 % 2, e / 4 + vj / 4 };
+			int vjlid = vjpos[0] + vjpos[1] * 3 + vjpos[2] * 9;
+			int vjid = v2v[vjlid];
+			if (vjid == -1) continue;
+			double Uj[3] = { gU[0][vjid], gU[1][vjid], gU[2][vjid] };
+			for (int krow = 0; krow < 3; krow++) {
+				for (int kcol = 0; kcol < 3; kcol++) {
+					KeU[krow] += penal * (c11 * KE11[vi * 3 + krow][vj * 3 + kcol] * Uj[kcol] + \
+					c12 * KE12[vi * 3 + krow][vj * 3 + kcol] * Uj[kcol] + c44 * KE44[vi * 3 + krow][vj * 3 + kcol] * Uj[kcol]);
+				}
+			}
+		}
+
+		double Ui[3] = { gU[0][tid],gU[1][tid],gU[2][tid] };
+
+		double uKeu = Ui[0] * KeU[0] + Ui[1] * KeU[1] + Ui[2] * KeU[2];
+
+		atomicAdd(clist + eid, uKeu);
+	}
+	
+}
+
+
 void grid::Grid::elementCompliance(double* u[3], double* f[3], float* dst)
 {
 	devArray_t<double*, 3> ulist, flist;
@@ -4110,7 +4801,15 @@ void grid::Grid::elementCompliance(double* u[3], double* f[3], float* dst)
 
 	size_t grid_size, block_size;
 	make_kernel_param(&grid_size, &block_size, n_gsvertices, 512);
-	elementCompliance_kernel << <grid_size, block_size >> > (n_gsvertices, ulist, flist, _gbuf.rho_e, dst);
+	if(gridparams.cloak == 0){
+		printf("elementCompliance_kernel\n");
+		elementCompliance_kernel << <grid_size, block_size >> > (n_gsvertices, ulist, flist, _gbuf.rho_e, dst);
+	}
+	else if(gridparams.cloak == 1 || gridparams.cloak == 2 ){
+		printf("elementCompliance_kernel_cloak1\n");
+		elementCompliance_kernel_cloak1 << <grid_size, block_size >> > (n_gsvertices, ulist, flist, _gbuf.rho_e, _gbuf.C11_e, _gbuf.C12_e, _gbuf.C44_e, dst);
+	}
+	
 	cudaDeviceSynchronize();
 	cuda_error_check;
 }
@@ -4148,11 +4847,25 @@ void grid::HierarchyGrid::test_kernels(void)
 	float* rholist = _gridlayer[0]->_gbuf.rho_e;
 	if (_mode == no_support_constrain_force_direction || _mode == no_support_free_force) {
 		make_kernel_param(&grid_size, &block_size, nv, 512);
-		update_residual_OTFA_NS_kernel << <grid_size, block_size >> > (nv, rholist);
+		if(gridparams.cloak == 0){
+			printf("TEST: update_residual_OTFA_NS_kernel\n");
+			update_residual_OTFA_NS_kernel << <grid_size, block_size >> > (nv, rholist);
+		}
+		else if(gridparams.cloak == 1 || gridparams.cloak == 2){
+			printf("TEST: update_residual_OTFA_NS_kernel_cloak1\n");
+			update_residual_OTFA_NS_kernel_cloak1 << <grid_size, block_size >> > (nv, rholist, _gridlayer[0]->_gbuf.C11_e, _gridlayer[0]->_gbuf.C12_e, _gridlayer[0]->_gbuf.C44_e);
+		}
 	}
 	else if (_mode == with_support_constrain_force_direction || _mode == with_support_free_force) {
 		make_kernel_param(&grid_size, &block_size, nv, 256);
-		update_residual_OTFA_WS_kernel << <grid_size, block_size >> > (nv, rholist);
+		if(gridparams.cloak == 0){
+			printf("TEST: update_residual_OTFA_WS_kernel\n");
+			update_residual_OTFA_WS_kernel << <grid_size, block_size >> > (nv, rholist);
+		}
+		else if(gridparams.cloak == 1 || gridparams.cloak == 2){
+			printf("TEST: update_residual_OTFA_WS_kernel_cloak1\n");
+			update_residual_OTFA_WS_kernel_cloak1 << <grid_size, block_size >> > (nv, rholist, _gridlayer[0]->_gbuf.C11_e, _gridlayer[0]->_gbuf.C12_e, _gridlayer[0]->_gbuf.C44_e);
+		}
 	}
 	cudaDeviceSynchronize();
 	cuda_error_check;
@@ -4163,11 +4876,25 @@ void grid::HierarchyGrid::test_kernels(void)
 	t0 = tictoc::getTag();
 	if (_mode == no_support_constrain_force_direction || _mode == no_support_free_force) {
 		make_kernel_param(&grid_size, &block_size, nv, 512);
-		update_residual_OTFA_NS_kernel << <grid_size, block_size >> > (nv, rholist);
+		if(gridparams.cloak == 0){
+			printf("TEST: update_residual_OTFA_NS_kernel\n");
+			update_residual_OTFA_NS_kernel << <grid_size, block_size >> > (nv, rholist);
+		}
+		else if(gridparams.cloak == 1 || gridparams.cloak == 2){
+			printf("TEST: update_residual_OTFA_NS_kernel_cloak1\n");
+			update_residual_OTFA_NS_kernel_cloak1 << <grid_size, block_size >> > (nv, rholist, _gridlayer[0]->_gbuf.C11_e, _gridlayer[0]->_gbuf.C12_e, _gridlayer[0]->_gbuf.C44_e);
+		}
 	}
 	else if (_mode == with_support_constrain_force_direction || _mode == with_support_free_force) {
 		make_kernel_param(&grid_size, &block_size, nv * 8, 32 * 8);
-		update_residual_OTFA_WS_kernel_1 << <grid_size, block_size >> > (nv, rholist);
+		if(gridparams.cloak == 0){
+			printf("TEST: update_residual_OTFA_WS_kernel_1\n");
+			update_residual_OTFA_WS_kernel_1 << <grid_size, block_size >> > (nv, rholist);
+		}
+		else if(gridparams.cloak == 1 || gridparams.cloak == 2){
+			printf("TEST: update_residual_OTFA_WS_kernel_1_cloak1\n");
+			update_residual_OTFA_WS_kernel_1_cloak1 << <grid_size, block_size >> > (nv, rholist, _gridlayer[0]->_gbuf.C11_e, _gridlayer[0]->_gbuf.C12_e, _gridlayer[0]->_gbuf.C44_e);
+		}
 	}
 	cudaDeviceSynchronize();
 	cuda_error_check;

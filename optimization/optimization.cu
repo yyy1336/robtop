@@ -117,6 +117,8 @@ __global__ void computeSensitivity_kernel(int nv, float* rholist, double mu, flo
 }
 
 
+
+
 //  suppose Uworst, Fworst is prepared in U, F
 __global__ void computeSensitivity_kernel_yyy(int nv, float* rholist, double mu, float* sens, float* sens_C11, float* sens_C12, float* sens_C44) {
 	//nv: n_nodes
