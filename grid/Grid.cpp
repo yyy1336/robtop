@@ -2213,10 +2213,12 @@ void HierarchyGrid::update_stencil(void)
 		if (i == 0) continue;
 		// printf("\n\033[33m-- gridlayer%d --\n\033[0m", i);
 		restrict_stencil(*_gridlayer[i], *_gridlayer[i]->fineGrid, cloak);
+		printf("restrict_stencil Done.\n");
 		// printf("-- c1 = %6.4e\n", grids[0]->compliance());
 		// last layer build host system
 		if (i == _gridlayer.size() - 1) {
 			_gridlayer[i]->buildCoarsestSystem();
+			printf("buildCoarsestSystem Done.\n");
 		}
 		// printf("-- c2 = %6.4e\n", grids[0]->compliance());
 	}

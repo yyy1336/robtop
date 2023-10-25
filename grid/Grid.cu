@@ -47,6 +47,7 @@ __constant__ int gDEBUG[1];
 
 extern __constant__ double* gLoadtangent[2][3];
 extern __constant__ double* gLoadnormal[3];
+extern grid::GridParameter gridparams;
 
 extern gBitSAT<unsigned int> vid2loadid;
 
@@ -1923,6 +1924,67 @@ __global__ void update_residual_OTFA_NS_kernel(int nv, float* rholist) {
 	}
 }
 
+
+__global__ void update_residual_OTFA_NS_kernel_cloak1(int nv, float* rholist, float* c11list,  float* c12list, float* c44list ) {
+
+	__shared__ double KE11[24][24];
+	__shared__ double KE12[24][24];
+	__shared__ double KE44[24][24];
+
+	int tid = blockIdx.x*blockDim.x + threadIdx.x;
+
+	loadTemplateMatrix(KE11,1);
+	loadTemplateMatrix(KE12,2);
+	loadTemplateMatrix(KE44,3);
+
+	if (tid >= nv) return;
+
+	int vid = tid;
+
+	//int mode = gmode[0];
+	int v2v[27];
+	loadNeighborNodes(vid, v2v);
+
+	double KU[3] = { 0.,0.,0. };
+	float power = power_penalty[0];
+	for (int i = 0; i < 8; i++) {
+		int eid = gV2E[i][vid];
+		if (eid == -1) continue;
+		double penalty = powf(rholist[eid], power);
+		double c11 = c11list[eid];
+	    double c12 = c12list[eid];
+	    double c44 = c44list[eid];
+		int vi = 7 - i;
+		for (int vj = 0; vj < 8; vj++) {
+			int vjpos[3] = {
+				vj % 2 + i % 2,
+				vj % 4 / 2 + i % 4 / 2,
+				vj / 4 + i / 4
+			};
+			int vj_lid = vjpos[0] + vjpos[1] * 3 + vjpos[2] * 9;
+			int vj_vid = v2v[vj_lid];
+			if (vj_vid == -1) {
+				// DEBUG
+				printf("-- error in update residual otfa\n");
+				continue;
+			}
+			double u[3] = { gU[0][vj_vid],gU[1][vj_vid],gU[2][vj_vid] };
+			for (int row = 0; row < 3; row++) {
+				for (int col = 0; col < 3; col++) {
+					KU[row] += penalty * (c11 * KE11[row + vi * 3][col + vj * 3] * u[col] + \
+					c12 * KE12[row + vi * 3][col + vj * 3] * u[col] + c44 * KE44[row + vi * 3][col + vj * 3] * u[col]);
+				}
+			}
+		}
+
+	}
+
+	for (int i = 0; i < 3; i++) {
+		gR[i][vid] = gF[i][vid] - KU[i];
+	}
+}
+
+
 __global__ void update_residual_OTFA_WS_kernel(int nv, float* rholist) {
 
 	__shared__ double KE[24][24];
@@ -1980,6 +2042,73 @@ __global__ void update_residual_OTFA_WS_kernel(int nv, float* rholist) {
 		gR[i][vid] = gF[i][vid] - KU[i];
 	}
 }
+
+__global__ void update_residual_OTFA_WS_kernel_cloak1(int nv, float* rholist, float* c11list,  float* c12list, float* c44list) {
+
+	__shared__ double KE11[24][24];
+	__shared__ double KE12[24][24];
+	__shared__ double KE44[24][24];
+
+	int tid = blockIdx.x*blockDim.x + threadIdx.x;
+
+	loadTemplateMatrix(KE11,1);
+	loadTemplateMatrix(KE12,2);
+	loadTemplateMatrix(KE44,3);
+
+	if (tid >= nv) return;
+
+	int vid = tid;
+
+	// add fixed flag check
+	bool vfix[27], vload[27];
+	int v2v[27];
+	loadNeighborNodesAndFlags(vid, v2v, vfix, vload);
+
+	double KU[3] = { 0.,0.,0. };
+	float power = power_penalty[0];
+	for (int i = 0; i < 8; i++) {
+		int eid = gV2E[i][vid];
+		if (eid == -1) continue;
+		double penalty = powf(rholist[eid], power);
+		double c11 = c11list[eid];
+	    double c12 = c12list[eid];
+	    double c44 = c44list[eid];
+		int vi = 7 - i;
+		for (int vj = 0; vj < 8; vj++) {
+			int vjpos[3] = {
+				vj % 2 + i % 2,
+				vj % 4 / 2 + i % 4 / 2,
+				vj / 4 + i / 4
+			};
+			int vj_lid = vjpos[0] + vjpos[1] * 3 + vjpos[2] * 9;
+			int vj_vid = v2v[vj_lid];
+			if (vj_vid == -1) {
+				// DEBUG
+				printf("-- error in update residual otfa\n");
+				continue;
+			}
+			double u[3] = { gU[0][vj_vid],gU[1][vj_vid],gU[2][vj_vid] };
+			if (vfix[vj_lid]) {
+				u[0] = 0; u[1] = 0; u[2] = 0;
+			}
+			for (int row = 0; row < 3; row++) {
+				for (int col = 0; col < 3; col++) {
+					KU[row] += penalty * (c11 * KE11[row + vi * 3][col + vj * 3] * u[col] + \
+					c12 * KE12[row + vi * 3][col + vj * 3] * u[col] + c44 * KE44[row + vi * 3][col + vj * 3] * u[col]);
+				}
+			}
+		}
+	}
+
+	if (vfix[13]) {
+		KU[0] = 0; KU[1] = 0; KU[2] = 0;
+	}
+
+	for (int i = 0; i < 3; i++) {
+		gR[i][vid] = gF[i][vid] - KU[i];
+	}
+}
+
 
 template<int SetBlockSize = 32 * 8>
 __global__ void update_residual_OTFA_WS_kernel_1(int nv, float* rholist) {
@@ -2074,12 +2203,26 @@ void Grid::update_residual(void)
 	if (_layer == 0) {
 		if (_mode == no_support_constrain_force_direction || _mode == no_support_free_force) {
 			make_kernel_param(&grid_size, &block_size, n_gsvertices, 512);
-			update_residual_OTFA_NS_kernel << <grid_size, block_size >> > (n_gsvertices, _gbuf.rho_e);
+			if(gridparams.cloak == 0){
+				printf("update_residual_OTFA_NS_kernel\n");
+				update_residual_OTFA_NS_kernel << <grid_size, block_size >> > (n_gsvertices, _gbuf.rho_e);
+			}  
+			else if(gridparams.cloak == 1 || gridparams.cloak == 1){
+				printf("update_residual_OTFA_NS_kernel_cloak1\n");
+				update_residual_OTFA_NS_kernel_cloak1 << <grid_size, block_size >> > (n_gsvertices, _gbuf.rho_e, _gbuf.C11_e, _gbuf.C12_e, _gbuf.C44_e);
+			}
 		}
 		else if (_mode == with_support_constrain_force_direction || _mode == with_support_free_force) {
 #if 1
 			make_kernel_param(&grid_size, &block_size, n_gsvertices, 256);
-			update_residual_OTFA_WS_kernel << <grid_size, block_size >> > (n_gsvertices, _gbuf.rho_e);
+			if(gridparams.cloak == 0){
+				printf("update_residual_OTFA_WS_kernel\n");
+				update_residual_OTFA_WS_kernel << <grid_size, block_size >> > (n_gsvertices, _gbuf.rho_e);
+			}  
+			else if(gridparams.cloak == 1 || gridparams.cloak == 1){
+				printf("update_residual_OTFA_WS_kernel_cloak1\n");
+				update_residual_OTFA_WS_kernel_cloak1 << <grid_size, block_size >> > (n_gsvertices, _gbuf.rho_e, _gbuf.C11_e, _gbuf.C12_e, _gbuf.C44_e);
+			}
 #else
 			make_kernel_param(&grid_size, &block_size, n_gsvertices * 8, 32 * 8);
 			update_residual_OTFA_WS_kernel_1 << <grid_size, block_size >> > (n_gsvertices, _gbuf.rho_e);
@@ -2094,6 +2237,7 @@ void Grid::update_residual(void)
 		update_residual_kernel << <grid_size, block_size >> > (n_gsvertices, _gbuf.rxStencil);
 #else
 		make_kernel_param(&grid_size, &block_size, n_gsvertices * 13, 32 * 13);
+		printf("update_residual_kernel_1\n");
 		update_residual_kernel_1 << <grid_size, block_size >> > (n_gsvertices, _gbuf.rxStencil);
 
 #endif

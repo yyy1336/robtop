@@ -1126,7 +1126,9 @@ void TestSuit::testDistributeForceOpt_MMA(void)
 		int femit = 0;
 		while (rel_res > 1e-2 && femit++ < 50) {
 			rel_res = grids.v_cycle(1, 1);  //Solving FEM and updating U here, but where to update K? maybe in update_stencil();
-		}
+			                                //Answer: We don't store K, please read sec4.1 in the article for homo3d.
+		
+		printf("v_cycle done.\n");
 		// printf("-- c5 = %6.4e\n", grids[0]->compliance());
 		double c = grids[0]->compliance();
 		printf("-- c = %6.4e   r = %4.2lf%%  md = %4.2lf%%\n", c, rel_res * 100, Md * 100);
