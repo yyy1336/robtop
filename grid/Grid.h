@@ -214,6 +214,7 @@ namespace grid {
 			//double* rxStenil[27][9];
 			// stencil[27][9][vertex]
 			double* rxStencil;
+			double* rxStencilforlambda;
 
 			unsigned int* eActiveBits;
 			int* eActiveChunkSum;
@@ -240,6 +241,9 @@ namespace grid {
 			double* Urest[3];
 			double* F[3];
 			double* R[3];
+			double* lambda[3];
+			double* Fforlambda[3];
+			double* Rforlambda[3];
 			double* Fsupport[3];
 		} _gbuf;
 
@@ -453,11 +457,11 @@ namespace grid {
 			int * ebitflags
 		);
 
-		void gs_relax(int n_times = 1);
+		void gs_relax(int n_times = 1, bool forlambda = false);
 
 		//void gs_adjoint_relax(int n_times = 1);
 
-		void reset_displacement(void);
+		void reset_displacement(bool forlambda = false);
 
 		void reset_force(void);
 
@@ -467,17 +471,21 @@ namespace grid {
 
 		double compliance(void);
 
+		double compliancetest(void);
+
 		double distortion(void);
 
-		void update_residual(void);
+		void update_residual(bool forlambda = false);
 
 		//void update_adjoint_residual(void);
 
-		void prolongate_correction(void);
+		void prolongate_correction(bool forlambda = false);
 
-		void restrict_residual(void);
+		// void prolongate_correction(void);
 
-		double relative_residual(void);
+		void restrict_residual(bool forlambda = false);
+
+		double relative_residual(bool forlambda = false);
 
 		double residual(void);
 
@@ -487,11 +495,11 @@ namespace grid {
 
 		float volumeRatio(void);
 
-		void use_grid(void);
+		void use_grid(bool forlambda = false);
 
-		void solve_fem_host(void);
+		void solve_fem_host(bool forlambda = false);
 
-		void buildCoarsestSystem(void);
+		void buildCoarsestSystem(bool forlambda = false);
 
 		void compute_gscolor(gpu_manager_t& gm, BitSAT<unsigned int>& vbitsat, BitSAT<unsigned int>& ebitsat, int vreso, int* vbitflaghost, int* ebitflaghost);
 
@@ -570,6 +578,7 @@ namespace grid {
 		void v3_add(double* a[3], double alpha, double* b[3]);
 		void v3_minus(double* a[3], double alpha, double* b[3]);
 		void v3_minus(double* dst[3], double* a[3], double alpha, double* b[3]);
+		void v3_minus(double* dst[3], double alpha, double* a[3], double beta, double* b[3]);
 		void v3_scale(double* v[3], double ampl);
 		double v3_normUminus0(float* rho, double* a[3], int* passive);
 		double v3_normUminus(float* rho, double* a[3], double* b[3], int* passive);
@@ -670,15 +679,15 @@ namespace grid {
 
 		void resetAllResidual(void);
 
-		void restrict_stencil_dyadic(Grid& dstcoarse, Grid& srcfine, int cloak);
+		void restrict_stencil_dyadic(Grid& dstcoarse, Grid& srcfine, int cloak, bool forlambda = false);
 
-		void restrict_stencil_nondyadic(Grid& dstcoarse, Grid& srcfine, int cloak);
+		void restrict_stencil_nondyadic(Grid& dstcoarse, Grid& srcfine, int cloak, bool forlambda = false);
 
 		//void restrict_adjoint_stencil_nondyadic(Grid& dstcoarse, Grid& srcfine);
 
 		//void restrict_adjoint_stencil_dyadic(Grid& dstcoarse, Grid& srcfine);
 
-		void restrict_stencil(Grid& dstcoarse, Grid& srcfine, int cloak);
+		void restrict_stencil(Grid& dstcoarse, Grid& srcfine, int cloak, bool forlambda = false);
 
 		//void restrict_adjoint_stencil(Grid& dstcoarse, Grid& srcfine);
 
@@ -714,11 +723,11 @@ namespace grid {
 
 		void getNodePos(Grid& g, std::vector<double>& p3host);
 
-		void update_stencil(void);
+		void update_stencil(bool forlambda = false);
 
 		//void update_adjoint_stencil(void);
 
-		double v_cycle(int pre_relax = 1, int post_relax = 1);
+		double v_cycle(int pre_relax = 1, int post_relax = 1, bool forlambda = false);
 
 		double v_halfcycle(int depth, int pre_relax = 1, int post_relax = 1);
 

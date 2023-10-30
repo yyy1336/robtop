@@ -34,6 +34,9 @@ __constant__ float power_penalty[1];
 __constant__ double* gU[3];
 __constant__ double* gF[3];
 __constant__ double* gR[3];
+// __constant__ double* glambda[3];
+// __constant__ double* gFforlambda[3];  //=-2(U-U0)
+// __constant__ double* gRforlambda[3];
 __constant__ double* gUworst[3];
 __constant__ double* gFworst[3];
 __constant__ double* gRfine[3];
@@ -51,16 +54,31 @@ extern grid::GridParameter gridparams;
 
 extern gBitSAT<unsigned int> vid2loadid;
 
-void Grid::use_grid(void)
+void Grid::use_grid(bool forlambda)
 {
 	cudaMemcpyToSymbol(gV2V, _gbuf.v2v, sizeof(gV2V));
 	cudaMemcpyToSymbol(gV2Vfine, _gbuf.v2vfine, sizeof(gV2Vfine));
 	cudaMemcpyToSymbol(gV2Vcoarse, _gbuf.v2vcoarse, sizeof(gV2Vcoarse));
 	cudaMemcpyToSymbol(gV2E, _gbuf.v2e, sizeof(gV2E));
 	cudaMemcpyToSymbol(gV2VfineC, _gbuf.v2vfinecenter, sizeof(gV2VfineC));
-	cudaMemcpyToSymbol(gU, _gbuf.U, sizeof(gU));
-	cudaMemcpyToSymbol(gF, _gbuf.F, sizeof(gF));
-	cudaMemcpyToSymbol(gR, _gbuf.R, sizeof(gR));
+	if(forlambda){
+		cudaMemcpyToSymbol(gU, _gbuf.lambda, sizeof(gU));
+		// devArray_t<double*, 3> Udiff;
+		// Udiff.create(n_gsvertices);
+		// v3_minus(Udiff._data, -2.f, _gbuf.U, -2.f, _gbuf.Urest);
+		// cudaMemcpyToSymbol(gFforlambda, Udiff._data, sizeof(gFforlambda));
+		// 像上面这样写又会导致MMA每步ittt = 200。。。。
+		v3_minus(_gbuf.Fforlambda, -2.f, _gbuf.U, -2.f, _gbuf.Urest);
+		cudaMemcpyToSymbol(gF, _gbuf.Fforlambda, sizeof(gF));
+		// cudaMemcpyToSymbol(gF, _gbuf.F, sizeof(gF));
+		cudaMemcpyToSymbol(gR, _gbuf.Rforlambda, sizeof(gR));
+	}
+	else{
+		cudaMemcpyToSymbol(gU, _gbuf.U, sizeof(gU));
+		cudaMemcpyToSymbol(gF, _gbuf.F, sizeof(gF));
+		cudaMemcpyToSymbol(gR, _gbuf.R, sizeof(gR));
+	}
+	
 	cudaMemcpyToSymbol(gUworst, _gbuf.Uworst, sizeof(gUworst));
 	cudaMemcpyToSymbol(gFworst, _gbuf.Fworst, sizeof(gFworst));
 	cudaMemcpyToSymbol(gGS_num, gs_num, sizeof(gGS_num));
@@ -71,10 +89,20 @@ void Grid::use_grid(void)
 	if (fineGrid != nullptr) {
 		cudaMemcpyToSymbol(gVfine2Vfine, fineGrid->_gbuf.v2v, sizeof(gVfine2Vfine));
 		cudaMemcpyToSymbol(gVfine2Efine, fineGrid->_gbuf.v2e, sizeof(gVfine2Efine));
-		cudaMemcpyToSymbol(gRfine, fineGrid->_gbuf.R, sizeof(gRfine));
+		if(forlambda){
+			cudaMemcpyToSymbol(gRfine, fineGrid->_gbuf.Rforlambda, sizeof(gRfine));
+		}
+		else{
+			cudaMemcpyToSymbol(gRfine, fineGrid->_gbuf.R, sizeof(gRfine));
+		}
 	}
 	if (coarseGrid != nullptr) {
-		cudaMemcpyToSymbol(gUcoarse, coarseGrid->_gbuf.U, sizeof(gUcoarse));
+		if(forlambda){
+			cudaMemcpyToSymbol(gUcoarse, coarseGrid->_gbuf.lambda, sizeof(gUcoarse));
+		}
+		else{
+			cudaMemcpyToSymbol(gUcoarse, coarseGrid->_gbuf.U, sizeof(gUcoarse));
+		}
 	}
 	//cudaDeviceSynchronize();
 	cuda_error_check;
@@ -424,20 +452,29 @@ __global__ void restrict_stencil_dyadic_OTFA_kernel_cloak1(int nv_coarse, double
 	}
 }
 
-void HierarchyGrid::restrict_stencil_dyadic(Grid& dstcoarse, Grid& srcfine, int cloak)
+void HierarchyGrid::restrict_stencil_dyadic(Grid& dstcoarse, Grid& srcfine, int cloak, bool forlambda)
 {
-	dstcoarse.use_grid();
+	dstcoarse.use_grid(forlambda);
 	size_t grid_size, block_size;
 	constexpr int BlockSize = 32 * 6;
 	if (dstcoarse._layer == 0 && srcfine._layer == 1) {
 		make_kernel_param(&grid_size, &block_size, dstcoarse.n_gsvertices * 9, BlockSize);
 		if(cloak == 0){
 			printf("\n\033[33m-- restrict_stencil_dyadic_OTFA_kernel --\n\033[0m");
-		    restrict_stencil_dyadic_OTFA_kernel<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rho_e);
+		    restrict_stencil_dyadic_OTFA_kernel<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices,\
+			 dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rho_e);
 		}
 		else if(cloak == 1){
-			printf("\n\033[33m-- restrict_stencil_dyadic_OTFA_kernel_cloak1 --\n\033[0m");
-		    restrict_stencil_dyadic_OTFA_kernel_cloak1<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rho_e, srcfine._gbuf.C11_e, srcfine._gbuf.C12_e, srcfine._gbuf.C44_e);
+			if(forlambda){
+				printf("\n\033[33m-- restrict_stencil_dyadic_OTFA_kernel_cloak1 _forlambda=true--\n\033[0m");
+				restrict_stencil_dyadic_OTFA_kernel_cloak1<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices,\
+				 dstcoarse._gbuf.rxStencilforlambda, srcfine.n_gsvertices, srcfine._gbuf.rho_e, srcfine._gbuf.C11_e, srcfine._gbuf.C12_e, srcfine._gbuf.C44_e);
+			}
+			else{
+				printf("\n\033[33m-- restrict_stencil_dyadic_OTFA_kernel_cloak1 _forlambda=false--\n\033[0m");
+				restrict_stencil_dyadic_OTFA_kernel_cloak1<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices,\
+				 dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rho_e, srcfine._gbuf.C11_e, srcfine._gbuf.C12_e, srcfine._gbuf.C44_e);
+			}
 		}
 		cudaDeviceSynchronize();
 		cuda_error_check;
@@ -445,7 +482,10 @@ void HierarchyGrid::restrict_stencil_dyadic(Grid& dstcoarse, Grid& srcfine, int 
 	else {
 		make_kernel_param(&grid_size, &block_size, dstcoarse.n_gsvertices * 9, BlockSize);
 		// printf("\n\033[33m-- restrict_stencil_dyadic_kernel --\n\033[0m");
-		restrict_stencil_dyadic_kernel<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rxStencil);
+		if(forlambda) restrict_stencil_dyadic_kernel<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, \
+		 dstcoarse._gbuf.rxStencilforlambda, srcfine.n_gsvertices, srcfine._gbuf.rxStencilforlambda);
+		else restrict_stencil_dyadic_kernel<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, \
+		 dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rxStencil);
 		
 		cudaDeviceSynchronize();
 		cuda_error_check;
@@ -908,13 +948,13 @@ __global__ void restrict_stencil_nondyadic_OTFA_WS_kernel_cloak1(int nv_coarse, 
 }
 
 
-void HierarchyGrid::restrict_stencil_nondyadic(Grid& dstcoarse, Grid& srcfine, int cloak)
+void HierarchyGrid::restrict_stencil_nondyadic(Grid& dstcoarse, Grid& srcfine, int cloak, bool forlambda)
 {
 	if (dstcoarse._layer != 2 || srcfine._layer != 0) {
 		std::cout << "\033[31m" << "Non dyadic restriction is only applied on finest grid" << "\033[0m" << std::endl;
 	}
 
-	dstcoarse.use_grid();
+	dstcoarse.use_grid(forlambda);
 
 	constexpr int BlockSize = 32 * 4;
 	size_t grid_size, block_size;
@@ -922,44 +962,67 @@ void HierarchyGrid::restrict_stencil_nondyadic(Grid& dstcoarse, Grid& srcfine, i
 	if (_mode == no_support_constrain_force_direction || _mode == no_support_free_force) {
 		if(cloak == 0){
 			printf("\n\033[33m-- restrict_stencil_nondyadic_OTFA_NS_kernel --\n\033[0m");
-		    restrict_stencil_nondyadic_OTFA_NS_kernel<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rho_e, srcfine._gbuf.vBitflag);
+		    restrict_stencil_nondyadic_OTFA_NS_kernel<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices,\
+			 dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rho_e, srcfine._gbuf.vBitflag);
 		}
 		else if(cloak == 1){
-			printf("\n\033[33m-- restrict_stencil_nondyadic_OTFA_NS_kernel_cloak1 --\n\033[0m");
-		    restrict_stencil_nondyadic_OTFA_NS_kernel_cloak1<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rho_e, srcfine._gbuf.C11_e, srcfine._gbuf.C12_e, srcfine._gbuf.C44_e, srcfine._gbuf.vBitflag);
+			if(forlambda){
+				printf("\n\033[33m-- restrict_stencil_nondyadic_OTFA_NS_kernel_cloak1 _forlambda=true --\n\033[0m");
+				restrict_stencil_nondyadic_OTFA_NS_kernel_cloak1<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices,\
+				 dstcoarse._gbuf.rxStencilforlambda, srcfine.n_gsvertices, srcfine._gbuf.rho_e, srcfine._gbuf.C11_e, srcfine._gbuf.C12_e, srcfine._gbuf.C44_e, srcfine._gbuf.vBitflag);
+			}
+			else{
+				printf("\n\033[33m-- restrict_stencil_nondyadic_OTFA_NS_kernel_cloak1 _forlambda=false --\n\033[0m");
+				restrict_stencil_nondyadic_OTFA_NS_kernel_cloak1<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices,\
+				 dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rho_e, srcfine._gbuf.C11_e, srcfine._gbuf.C12_e, srcfine._gbuf.C44_e, srcfine._gbuf.vBitflag);
+			}
 		}
 	}
 	else if (_mode == with_support_constrain_force_direction || _mode == with_support_free_force) {
 		if(cloak == 0){
 			// printf("\n\033[33m-- restrict_stencil_nondyadic_OTFA_WS_kernel --\n\033[0m");
-		    restrict_stencil_nondyadic_OTFA_WS_kernel<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rho_e, srcfine._gbuf.vBitflag);
+		    restrict_stencil_nondyadic_OTFA_WS_kernel<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices,\
+			 dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rho_e, srcfine._gbuf.vBitflag);
 		}
 		else if(cloak == 1){
-			// printf("\n\033[33m-- restrict_stencil_nondyadic_OTFA_WS_kernel_cloak1 --\n\033[0m");
-		    restrict_stencil_nondyadic_OTFA_WS_kernel_cloak1<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rho_e, srcfine._gbuf.C11_e, srcfine._gbuf.C12_e, srcfine._gbuf.C44_e, srcfine._gbuf.vBitflag);
+			if(forlambda){
+				printf("\n\033[33m-- restrict_stencil_nondyadic_OTFA_WS_kernel_cloak1 _forlambda=true --\n\033[0m");
+				restrict_stencil_nondyadic_OTFA_WS_kernel_cloak1<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices,\
+				 dstcoarse._gbuf.rxStencilforlambda, srcfine.n_gsvertices, srcfine._gbuf.rho_e, srcfine._gbuf.C11_e, srcfine._gbuf.C12_e, srcfine._gbuf.C44_e, srcfine._gbuf.vBitflag);
+			}
+			else{
+				printf("\n\033[33m-- restrict_stencil_nondyadic_OTFA_WS_kernel_cloak1 _forlambda=false --\n\033[0m");
+				restrict_stencil_nondyadic_OTFA_WS_kernel_cloak1<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices,\
+				 dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rho_e, srcfine._gbuf.C11_e, srcfine._gbuf.C12_e, srcfine._gbuf.C44_e, srcfine._gbuf.vBitflag);
+			}
 		}
 	}
 	cudaDeviceSynchronize();
 	cuda_error_check;
 }
 
-void HierarchyGrid::restrict_stencil(Grid& dstcoarse, Grid& srcfine, int cloak)
+void HierarchyGrid::restrict_stencil(Grid& dstcoarse, Grid& srcfine, int cloak, bool forlambda)
 {
 	// printf("dstcoarse = %d, srcfine = %d", dstcoarse._layer, srcfine._layer);
 	if (dstcoarse.is_dummy()) return;
 	if (dstcoarse._layer == 0) return;
-
-	init_array(dstcoarse._gbuf.rxStencil, double{ 0 }, 27 * 9 * dstcoarse.n_gsvertices);
+    
+	if(forlambda){
+		init_array(dstcoarse._gbuf.rxStencilforlambda, double{ 0 }, 27 * 9 * dstcoarse.n_gsvertices);
+	}
+	else{
+		init_array(dstcoarse._gbuf.rxStencil, double{ 0 }, 27 * 9 * dstcoarse.n_gsvertices);
+	}
 
 	if (_setting.skiplayer1 && dstcoarse._layer == 2 && srcfine._layer == 0) {
-		restrict_stencil_nondyadic(dstcoarse, srcfine, cloak);
+		restrict_stencil_nondyadic(dstcoarse, srcfine, cloak, forlambda);
 	}
 	else {
 		if (dstcoarse._layer - srcfine._layer != 1) {
 			printf("\033[31mOnly Support stencil restriction between neighbor layers!\033[0m\n");
 			throw std::runtime_error("");
 		}
-		restrict_stencil_dyadic(dstcoarse, srcfine, cloak);
+		restrict_stencil_dyadic(dstcoarse, srcfine, cloak, forlambda);
 	}
 }
 
@@ -1789,10 +1852,10 @@ _blocksum:
 
 
 
-void Grid::gs_relax(int n_times)
+void Grid::gs_relax(int n_times, bool forlambda)
 {
 	if (is_dummy()) return;
-	use_grid();
+	use_grid(forlambda);
 	cuda_error_check;
 	if (_layer == 0) {
 		for (int n = 0; n < n_times; n++) {
@@ -1830,14 +1893,16 @@ void Grid::gs_relax(int n_times)
 		}
 	}
 	else {
-		check_array_len(_gbuf.rxStencil, 27 * 9 * n_gsvertices);
+		if(forlambda) check_array_len(_gbuf.rxStencilforlambda, 27 * 9 * n_gsvertices);
+		else check_array_len(_gbuf.rxStencil, 27 * 9 * n_gsvertices);
 		for (int n = 0; n < n_times; n++) {
 			int gs_offset = 0;
 			for (int i = 0; i < 8; i++) {
 				size_t grid_size, block_size;
 				constexpr int BlockSize = 32 * 13;
 				make_kernel_param(&grid_size, &block_size, gs_num[i] * 13, BlockSize);
-				gs_relax_kernel<BlockSize> << <grid_size, block_size >> > (n_gsvertices, gs_num[i], _gbuf.rxStencil, gs_offset);
+				if(forlambda) gs_relax_kernel<BlockSize> << <grid_size, block_size >> > (n_gsvertices, gs_num[i], _gbuf.rxStencilforlambda, gs_offset);
+				else gs_relax_kernel<BlockSize> << <grid_size, block_size >> > (n_gsvertices, gs_num[i], _gbuf.rxStencil, gs_offset);
 				//cudaDeviceSynchronize();
 				//cuda_error_check;
 				gs_offset += gs_num[i];
@@ -2237,7 +2302,7 @@ __global__ void update_residual_OTFA_NS_kernel(int nv, float* rholist) {
 }
 
 
-__global__ void update_residual_OTFA_NS_kernel_cloak1(int nv, float* rholist, float* c11list,  float* c12list, float* c44list ) {
+__global__ void update_residual_OTFA_NS_kernel_cloak1(int nv, float* rholist, float* c11list,  float* c12list, float* c44list ,bool forlambda = false) {
 
 	__shared__ double KE11[24][24];
 	__shared__ double KE12[24][24];
@@ -2601,10 +2666,10 @@ __blocksum:
 	}
 }
 
-void Grid::update_residual(void)
+void Grid::update_residual(bool forlambda)
 {
 	if (is_dummy()) return;
-	use_grid();
+	use_grid(forlambda);
 	size_t grid_size, block_size;
 	if (_layer == 0) {
 		if (_mode == no_support_constrain_force_direction || _mode == no_support_free_force) {
@@ -2615,7 +2680,7 @@ void Grid::update_residual(void)
 			}  
 			else if(gridparams.cloak == 1 || gridparams.cloak == 1){
 				// printf("update_residual_OTFA_NS_kernel_cloak1\n");
-				update_residual_OTFA_NS_kernel_cloak1 << <grid_size, block_size >> > (n_gsvertices, _gbuf.rho_e, _gbuf.C11_e, _gbuf.C12_e, _gbuf.C44_e);
+				update_residual_OTFA_NS_kernel_cloak1 << <grid_size, block_size >> > (n_gsvertices, _gbuf.rho_e, _gbuf.C11_e, _gbuf.C12_e, _gbuf.C44_e, forlambda);
 			}
 		}
 		else if (_mode == with_support_constrain_force_direction || _mode == with_support_free_force) {
@@ -2644,7 +2709,8 @@ void Grid::update_residual(void)
 #else
 		make_kernel_param(&grid_size, &block_size, n_gsvertices * 13, 32 * 13);
 		// printf("update_residual_kernel_1\n");
-		update_residual_kernel_1 << <grid_size, block_size >> > (n_gsvertices, _gbuf.rxStencil);
+		if(forlambda) update_residual_kernel_1 << <grid_size, block_size >> > (n_gsvertices, _gbuf.rxStencilforlambda);
+		else update_residual_kernel_1 << <grid_size, block_size >> > (n_gsvertices, _gbuf.rxStencil);
 
 #endif
 		cudaDeviceSynchronize();
@@ -2768,9 +2834,9 @@ __global__ void restrict_residual_nondyadic_kernel(int nv) {
 	for (int k = 0; k < 3; k++) { gF[k][vid] = sumR[k]; }
 }
 
-void Grid::restrict_residual(void)
+void Grid::restrict_residual(bool forlambda)
 {
-	use_grid();
+	use_grid(forlambda);
 
 	size_t grid_size, block_size;
 	if (_layer == 2 && is_skip()) {
@@ -2870,10 +2936,10 @@ __global__ void prolongate_correction_nondyadic_kernel(int nv, int* vbitflag) {
 }
 
 
-void Grid::prolongate_correction(void)
+void Grid::prolongate_correction(bool forlambda)
 {
 	if (is_dummy()) return;
-	use_grid();
+	use_grid(forlambda);
 	size_t grid_size, block_size;
 	if (_layer == 0 && is_skip()) {
 		make_kernel_param(&grid_size, &block_size, n_gsvertices, 512);
@@ -2889,11 +2955,19 @@ void Grid::prolongate_correction(void)
 	}
 }
 
-void Grid::reset_displacement(void)
+void Grid::reset_displacement(bool forlambda)
 {
-	for (int i = 0; i < 3; i++) {
-		init_array(_gbuf.U[i], 0., n_gsvertices);
+	if(forlambda){
+		for (int i = 0; i < 3; i++) {
+			init_array(_gbuf.lambda[i], 0., n_gsvertices);
+		}
 	}
+	else{
+		for (int i = 0; i < 3; i++) {
+			init_array(_gbuf.U[i], 0., n_gsvertices);
+		}
+	}
+	
 }
 
 void Grid::reset_force(void)
@@ -2918,11 +2992,19 @@ double Grid::v3norm(double* v[3])
 	return s;
 }
 
-double Grid::relative_residual(void)
+double Grid::relative_residual(bool forlambda)
 {
-	double r = v3norm(_gbuf.R);
-	double f = v3norm(_gbuf.F);
-	return r / f;
+	if(forlambda){
+		double r = v3norm(_gbuf.Rforlambda);
+		double f = v3norm(_gbuf.Fforlambda);
+		return r / f;
+	}
+	else{
+		double r = v3norm(_gbuf.R);
+		double f = v3norm(_gbuf.F);
+		return r / f;
+	}
+	
 }
 
 double Grid::residual(void)
@@ -3130,6 +3212,26 @@ void Grid::v3_minus(double* dst[3], double* a[3], double alpha, double* b[3])
 	cuda_error_check;
 
 	map << <grid_dim, block_dim >> > (n_nodes(), [=]__device__(int tid) { dstz[tid] = az[tid] - alpha * bz[tid]; });
+	cudaDeviceSynchronize();
+	cuda_error_check;
+}
+
+void Grid::v3_minus(double* dst[3], double alpha, double* a[3], double beta, double* b[3])
+{
+	double* ax = a[0], *ay = a[1], *az = a[2];
+	double* bx = b[0], *by = b[1], *bz = b[2];
+	double* dstx = dst[0], *dsty = dst[1], *dstz = dst[2];
+	size_t grid_dim, block_dim;
+	make_kernel_param(&grid_dim, &block_dim, n_gsvertices, 512);
+	map << <grid_dim, block_dim >> > (n_nodes(), [=]__device__(int tid) { dstx[tid] = alpha * ax[tid] - beta * bx[tid]; });
+	cudaDeviceSynchronize();
+	cuda_error_check;
+
+	map << <grid_dim, block_dim >> > (n_nodes(), [=]__device__(int tid) { dsty[tid] = alpha * ay[tid] - beta * by[tid]; });
+	cudaDeviceSynchronize();
+	cuda_error_check;
+
+	map << <grid_dim, block_dim >> > (n_nodes(), [=]__device__(int tid) { dstz[tid] = alpha * az[tid] - beta * bz[tid]; });
 	cudaDeviceSynchronize();
 	cuda_error_check;
 }

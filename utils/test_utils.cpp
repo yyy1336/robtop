@@ -1152,7 +1152,18 @@ void TestSuit::testDistributeForceOpt_MMA(void)
 		printf("v_cycle done.\n");
 		// printf("-- c5 = %6.4e\n", grids[0]->compliance());
 		double c = grids[0]->compliance();
-		printf("-- c = %6.4e   r = %4.2lf%%  md = %4.2lf%%\n", c, rel_res * 100, Md * 100);
+		printf("-- c = %6.4e   r = %4.2lf%%  md = %4.2lf%%  femit = %d\n", c, rel_res * 100, Md * 100, femit);
+        
+		// test for v_cycle(1, 1, forlambda = true):
+		// 经测试正确：当在use_grid()中仍然把gF设置为 _gbuf.U时，算出的ctestlambda与c相等
+		update_stencil(true);  
+        rel_res = 1;
+		femit = 0;
+		while (rel_res > 1e-2 && femit++ < 50) {
+			rel_res = grids.v_cycle(1, 1, true);  //Solving FEM and updating U here, but where to update K? maybe in update_stencil();
+		}
+		double ctestlambda = grids[0]->compliancetest();
+		printf("-- ctestlambda = %6.4e   r = %4.2lf%%  femit = %d\n", ctestlambda, rel_res * 100, femit);
 
 		if((params.cloak == 1 || params.cloak == 2) && itn == 1){
 			for (int i = 0; i < 3; i++){
@@ -1181,14 +1192,14 @@ void TestSuit::testDistributeForceOpt_MMA(void)
 				rel_res = grids.v_cycle(1, 1);  
 			}
 			double c = grids[0]->compliance();
-			printf("-- c = %6.4e   r = %4.2lf%%  md = %4.2lf%%\n", c, rel_res * 100, Md * 100);
+			printf("-- c = %6.4e   r = %4.2lf%%  md = %4.2lf%%  femit = %d\n", c, rel_res * 100, Md * 100, femit);
 			double* sum1 = (double*)grid::Grid::getTempBuf(sizeof(double) * ne / 100);
 			double Vratio1= parallel_sum_d(grids[0]->getRho(), sum1, ne) / ne;
 			printf("Vreinit: V = %f, n = %d \nReInit Done.\n", Vratio1, ne);
 		}
 		// 为什么加上distortion计算后MMA总是ittt=200，而去掉后就只有个位数？？？感觉去掉后才是正常的
 		double distortion = grids[0]->distortion();
-		printf("-- distortion = %6.4e   r = %4.2lf%%  md = %4.2lf%%\n", distortion, rel_res * 100, Md * 100);
+		printf("-- distortion = %6.4e\n", distortion);
 		
 		// std::cout << grids[0]->getDisplacement() << std::endl;
 		if (isnan(c) || abs(c) < 1e-11) { printf("\033[31m-- Error compliance\033[0m\n"); exit(-1); }

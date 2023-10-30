@@ -86,7 +86,7 @@ void initDensities(double rho);
 
 void initDesignVaribles(double rho, double C11, double C12, double C44);
 
-void update_stencil(void);
+void update_stencil(bool forlambda = false);
 
 void test_rigid_displacement(void);
 

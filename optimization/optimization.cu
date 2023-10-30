@@ -24,6 +24,9 @@ extern  __constant__ float power_penalty[1];
 extern  __constant__ double* gU[3];
 extern  __constant__ double* gF[3];
 extern  __constant__ double* gR[3];
+// extern __constant__ double* glambda[3];
+// extern __constant__ double* gFforlambda[3];  //=-2(U-U0)
+// extern __constant__ double* gRforlambda[3];
 extern  __constant__ double* gUworst[3];
 extern  __constant__ double* gFworst[3];
 extern  __constant__ double* gRfine[3];

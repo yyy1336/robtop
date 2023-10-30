@@ -702,9 +702,9 @@ void initDesignVaribles(double rho, double C11, double C12, double C44)
 	grids[0]->init_design_variable(rho, C11, C12, C44);
 }
 
-void update_stencil(void)
+void update_stencil(bool forlambda)
 {
-	grids.update_stencil();
+	grids.update_stencil(forlambda);
 	// printf("-- c3 = %6.4e\n", grids[0]->compliance());
 }
 

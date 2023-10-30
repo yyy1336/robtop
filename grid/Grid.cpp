@@ -36,6 +36,9 @@ extern void init_array(T* dev_array, T value, int array_size);
 static Eigen::SparseMatrix<double> Klast;
 static Eigen::Matrix<double, -1, -1> fullK;
 static Eigen::Matrix<double, -1, -1> Klastkernel;
+// static Eigen::SparseMatrix<double> Klastforlambda;
+// static Eigen::Matrix<double, -1, -1> fullKforlambda;
+// static Eigen::Matrix<double, -1, -1> Klastkernelforlambda;
 static std::vector<int> vlastrowid;
 static int nvlastrows;
 static Eigen::BDCSVD<Eigen::MatrixXd> svd;
@@ -269,6 +272,7 @@ void grid::HierarchyGrid::genFromMesh(const std::vector<float>& pcoords, const s
 	std::vector<std::vector<int>> v2vcoarsehost[8];
 	std::vector<std::vector<int>> v2vhost[27];
 	std::vector<std::vector<double>> rxStencilhost[27][9];
+	std::vector<std::vector<double>> rxStencilforlambdahost[27][9];
 	std::vector<std::vector<int>> vbitflaglist;
 	std::vector<std::vector<int>> ebitflaglist;
 
@@ -528,6 +532,7 @@ void grid::HierarchyGrid::genFromMesh(const std::vector<unsigned int> &solid_bit
 	std::vector<std::vector<int>> v2vcoarsehost[8];
 	std::vector<std::vector<int>> v2vhost[27];
 	std::vector<std::vector<double>> rxStencilhost[27][9];
+	std::vector<std::vector<double>> rxStencilforlambdahost[27][9];
 	std::vector<std::vector<int>> vbitflaglist;
 	std::vector<std::vector<int>> ebitflaglist;
 
@@ -1226,7 +1231,7 @@ double HierarchyGrid::elementLength(void)
 	return _gridlayer[0]->elementLength();
 }
 
-double HierarchyGrid::v_cycle(int pre_relax, int post_relax)
+double HierarchyGrid::v_cycle(int pre_relax, int post_relax, bool forlambda)
 {
 	int depth = n_grid() - 1;
 	// downside
@@ -1234,19 +1239,19 @@ double HierarchyGrid::v_cycle(int pre_relax, int post_relax)
 		if (_gridlayer[i]->is_dummy()) { continue; }
 		if (i > 0) {
 			//_gridlayer[i]->stencil2matlab("rxcoarse");
-			_gridlayer[i]->fineGrid->update_residual();
+			_gridlayer[i]->fineGrid->update_residual(forlambda);
 			//_gridlayer[i]->fineGrid->residual2matlab("rfine");
-			_gridlayer[i]->restrict_residual(); 
+			_gridlayer[i]->restrict_residual(forlambda); 
 			//_gridlayer[i]->force2matlab("fcoarse");
-			_gridlayer[i]->reset_displacement();
+			_gridlayer[i]->reset_displacement(forlambda);
 		}
 		if (i < n_grid() - 1) {
-			_gridlayer[i]->gs_relax(pre_relax);
+			_gridlayer[i]->gs_relax(pre_relax, forlambda);
 			//_gridlayer[i]->displacement2matlab("u");
 		}
 		else {
 			//_gridlayer[i]->force2matlab("f");
-			_gridlayer[i]->solve_fem_host();
+			_gridlayer[i]->solve_fem_host(forlambda);
 			//_gridlayer[i]->displacement2matlab("u");
 		}
 	}
@@ -1258,19 +1263,19 @@ double HierarchyGrid::v_cycle(int pre_relax, int post_relax)
 		//_gridlayer[i]->displacement2matlab("u");
 		//_gridlayer[i]->update_residual();
 		//printf("-- [%d] r = %lf%%\n", i, _gridlayer[i]->relative_residual() * 100);
-		_gridlayer[i]->prolongate_correction();
+		_gridlayer[i]->prolongate_correction(forlambda);
 		//_gridlayer[i]->update_residual();
 		//printf("-- [%d] rc=  %lf%%\n", i, _gridlayer[i]->relative_residual() * 100);
 		//_gridlayer[i]->displacement2matlab("uc");
 		//_gridlayer[i]->force2matlab("fc");
-		_gridlayer[i]->gs_relax(post_relax);
+		_gridlayer[i]->gs_relax(post_relax, forlambda);
 		//_gridlayer[i]->update_residual();
 		//printf("-- [%d] rr=  %lf%%\n", i, _gridlayer[i]->relative_residual() * 100);
 		//_gridlayer[i]->displacement2matlab("ur");
 	}
 
-	_gridlayer[0]->update_residual();
-	return _gridlayer[0]->relative_residual();
+	_gridlayer[0]->update_residual(forlambda);
+	return _gridlayer[0]->relative_residual(forlambda);
 }
 
 double grid::HierarchyGrid::v_halfcycle(int depth, int pre_relax /*= 1*/, int post_relax /*= 1*/)
@@ -1736,8 +1741,11 @@ size_t grid::Grid::build(
 		_gbuf.U[i] = (double*)gm.add_buf(_name + " U " + std::to_string(i), sizeof(double)* nv_gs); gbuf_size += sizeof(double) * nv_gs;
 		_gbuf.F[i] = (double*)gm.add_buf(_name + " F " + std::to_string(i), sizeof(double)* nv_gs); gbuf_size += sizeof(double) * nv_gs;
 		_gbuf.R[i] = (double*)gm.add_buf(_name + " R " + std::to_string(i), sizeof(double)* nv_gs); gbuf_size += sizeof(double) * nv_gs;
-
+		
 		_gbuf.Urest[i] = (double*)gm.add_buf(_name + " Urest " + std::to_string(i), sizeof(double)* nv_gs); gbuf_size += sizeof(double) * nv_gs;
+		_gbuf.lambda[i] = (double*)gm.add_buf(_name + " lambda " + std::to_string(i), sizeof(double)* nv_gs); gbuf_size += sizeof(double) * nv_gs;
+		_gbuf.Fforlambda[i] = (double*)gm.add_buf(_name + " Fforlambda " + std::to_string(i), sizeof(double)* nv_gs); gbuf_size += sizeof(double) * nv_gs;
+		_gbuf.Rforlambda[i] = (double*)gm.add_buf(_name + " Rforlambda " + std::to_string(i), sizeof(double)* nv_gs); gbuf_size += sizeof(double) * nv_gs;
 		//if (_layer == 0) {
 		//	_gbuf.Uworst[i] = (double*)gm.add_buf(_name + " Uworst " + std::to_string(i), sizeof(double)* nv_gs); gbuf_size += sizeof(double) * nv_gs;
 		//	_gbuf.Fworst[i] = (double*)gm.add_buf(_name + " Fworst " + std::to_string(i), sizeof(double)* nv_gs); gbuf_size += sizeof(double) * nv_gs;
@@ -1849,6 +1857,8 @@ size_t grid::Grid::build(
 	if (_layer != 0) {
 		_gbuf.rxStencil = (double*)gm.add_buf(_name + " rxStencil ", sizeof(double) * nv_gs * 27 * 9); gbuf_size += sizeof(double) * nv_gs * 27 * 9;
 		gpu_manager_t::initMem(_gbuf.rxStencil, sizeof(double) * nv_gs * 27 * 9);
+		_gbuf.rxStencilforlambda = (double*)gm.add_buf(_name + " rxStencilforlambda ", sizeof(double) * nv_gs * 27 * 9); gbuf_size += sizeof(double) * nv_gs * 27 * 9;
+		gpu_manager_t::initMem(_gbuf.rxStencilforlambda, sizeof(double) * nv_gs * 27 * 9);
 	}
 
 	printf("-- Allocate %d MB buffer\n", gbuf_size / 1024 / 1024);
@@ -2061,11 +2071,16 @@ void Grid::eidmap2matlab(const std::string & nam)
 #endif
 }
 
-void Grid::buildCoarsestSystem(void)
+void Grid::buildCoarsestSystem(bool forlambda)
 {
 	std::vector<double> rxdata(n_gsvertices * 27 * 9);
-	gpu_manager_t::download_buf(rxdata.data(), _gbuf.rxStencil, sizeof(double) * n_gsvertices * 27 * 9);
-
+	if(forlambda){
+		gpu_manager_t::download_buf(rxdata.data(), _gbuf.rxStencilforlambda, sizeof(double) * n_gsvertices * 27 * 9);
+	}
+	else{
+		gpu_manager_t::download_buf(rxdata.data(), _gbuf.rxStencil, sizeof(double) * n_gsvertices * 27 * 9);
+	}
+	
 	std::vector<Eigen::Triplet<double>> triplist;
 
 	vlastrowid.resize(n_gsvertices);
@@ -2158,6 +2173,11 @@ double Grid::compliance(void)
 	return v3_dot(_gbuf.F, _gbuf.U);
 }
 
+double Grid::compliancetest(void)
+{
+	return v3_dot(_gbuf.F, _gbuf.lambda);
+}
+
 double Grid::distortion(void)
 {
 	//return v3_norm(_gbuf.U);  //trial1，对
@@ -2189,7 +2209,7 @@ double Grid::distortion(void)
 	return absolute_distortion/v3_normUminus0(_gbuf.rho_e, _gbuf.Urest, _gbuf.passive);
 }
 
-void Grid::solve_fem_host(void)
+void Grid::solve_fem_host(bool forlambda)
 {
 	static Eigen::BiCGSTAB<Eigen::SparseMatrix<double>, Eigen::IncompleteLUT<double>> solverhost;
 	//auto& solverhost = svd;
@@ -2249,7 +2269,15 @@ void Grid::solve_fem_host(void)
 	}
 
 	for (int i = 0; i < 3; i++) {
-		gpu_manager_t::upload_buf(_gbuf.U[i], v3host[i].data(), sizeof(double) * n_gsvertices);
+		if(forlambda){
+			gpu_manager_t::upload_buf(_gbuf.lambda[i], v3host[i].data(), sizeof(double) * n_gsvertices);
+		}
+		else{
+			gpu_manager_t::upload_buf(_gbuf.U[i], v3host[i].data(), sizeof(double) * n_gsvertices);
+		}
+		// printf("n_gsvertices_corasest = %d\n", n_gsvertices);
+		// gpu_manager_t::upload_buf(_gbuf.U[i], v3host[i].data(), sizeof(double) * n_gsvertices);
+		// gpu_manager_t::upload_buf(_gbuf.lambda[i], v3host[i].data(), sizeof(double) * n_gsvertices);
 	}
 }
 
@@ -2316,7 +2344,7 @@ void Grid::enumerate_gs_subset(
 	}
 }
 
-void HierarchyGrid::update_stencil(void)
+void HierarchyGrid::update_stencil(bool forlambda)
 { 
 	int cloak = gridparams.cloak;
 	// printf("\n\033[33m-- _gridlayer.size() = %d --\n\033[0m", _gridlayer.size());
@@ -2325,12 +2353,12 @@ void HierarchyGrid::update_stencil(void)
 		if (_gridlayer[i]->is_dummy()) continue; //skiplayer
 		if (i == 0) continue;
 		// printf("\n\033[33m-- gridlayer%d --\n\033[0m", i);
-		restrict_stencil(*_gridlayer[i], *_gridlayer[i]->fineGrid, cloak);
+		restrict_stencil(*_gridlayer[i], *_gridlayer[i]->fineGrid, cloak, forlambda);
 		// printf("restrict_stencil Done.\n");
 		// printf("-- c1 = %6.4e\n", grids[0]->compliance());
 		// last layer build host system
 		if (i == _gridlayer.size() - 1) {
-			_gridlayer[i]->buildCoarsestSystem();
+			_gridlayer[i]->buildCoarsestSystem(forlambda);
 			// printf("buildCoarsestSystem Done.\n");
 		}
 		// printf("-- c2 = %6.4e\n", grids[0]->compliance());

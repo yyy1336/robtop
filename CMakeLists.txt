@@ -124,8 +124,31 @@ include_directories("${CMAKE_SOURCE_DIR}/utils")
 include_directories("${CMAKE_SOURCE_DIR}/voxelIO")
 include_directories("${CMAKE_SOURCE_DIR}/boundary")
 include_directories("${CMAKE_SOURCE_DIR}/volumerender/cuda_samples")
+include_directories("${CMAKE_SOURCE_DIR}/culib2")
+include_directories("${CMAKE_SOURCE_DIR}/cuda_helper")
 
 add_executable(robtop  ${sources})
+
+
+#[[
+file(GLOB cppfiles 
+        *.cpp
+        boundary/*.cpp
+        cuda_helper/*.cpp
+        culib/*.cpp
+        culib2/*.cpp
+        element/*.cpp
+        grid/*.cpp
+        matlab/*.cpp
+        mem/*.cpp
+        optimization/*.cpp
+        utils/*.cpp
+        voxellO/*.cpp
+        voxelizer/*.cpp
+    )
+add_executable(robtop ${cppfiles})
+#]]
+
 set_target_properties(robtop PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 set_target_properties(robtop PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 set_target_properties(robtop PROPERTIES CUDA_ARCHITECTURES "61;75;86")
