@@ -661,8 +661,8 @@ void optimization(void) {
 	printf("\n=   finished ???  =\n");
 
 	// write result density field
-	// grids.writeDensity(grids.getPath("out.vdb"));
-	grids.writeDensity2txt(grids.getPath("out.txt"));
+	grids.writeDensity(grids.getPath("out.vdb"));
+	// grids.writeDensity2txt(grids.getPath("out.txt"));
 	printf("\n=   finished !!!   =\n");
 
 	// write worst compliance record during optimization
@@ -697,9 +697,9 @@ void initDensities(double rho)
 }
 
 //TODO_yyy: set appropriate inits for Cxx
-void initDesignVaribles(double rho)
+void initDesignVaribles(double rho, double C11, double C12, double C44)
 {
-	grids[0]->init_design_variable(rho, rho, rho, rho);
+	grids[0]->init_design_variable(rho, C11, C12, C44);
 }
 
 void update_stencil(void)

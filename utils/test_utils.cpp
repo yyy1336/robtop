@@ -35,6 +35,7 @@ extern double parallel_sum_d(const T* indata, double* dump, size_t array_size, T
 template<typename T>
 extern T parallel_maxabs(const T* indata, T* dump, size_t array_size, T* max_dst = nullptr);
 
+
 void aggregatedSystem(const std::vector<int>& loadnodes, Eigen::MatrixXd& C, double err_tol = 1e-2, Eigen::MatrixXd* pZ = nullptr);
 void setForce(Eigen::Matrix<double, -1, 1>& f);
 Eigen::Matrix<double, -1, 1> solveFem(void);
@@ -1076,8 +1077,28 @@ void TestSuit::testDistributeForceOpt_MMA(void)
 	grids.writeSupportForce(grids.getPath("fs"));
 
 #if 1
-	// initDensities(params.volume_ratio);
-	initDesignVaribles(params.volume_ratio);
+    if(params.cloak == 0){
+		initDensities(params.volume_ratio);
+	}
+	else if(params.cloak == 1){
+		// init for rest
+		double E = params.youngs_modulu;
+		double nu = params.poisson_ratio;
+		initDesignVaribles(0.4f, E*(1-nu)/((1+nu)*(1-2*nu)), E*nu/((1+nu)*(1-2*nu)), E/((1+nu)*2));
+		// update_stencil();  
+		// double rel_res = 1;
+		// int femit = 0;
+		// while (rel_res > 1e-2 && femit++ < 50) {
+		// 	rel_res = grids.v_cycle(1, 1);  
+		// }
+		// printf("compliance = %f\n", grids[0]->compliance());
+		// initDesignVaribles(params.volume_ratio, E*(1-nu)/((1+nu)*(1-2*nu)), E*nu/((1+nu)*(1-2*nu)), E/((1+nu)*2));
+		// update_stencil();  
+		// while (rel_res > 1e-2 && femit++ < 50) {
+		// 	rel_res = grids.v_cycle(1, 1);  
+		// }
+		// printf("compliance = %f\n", grids[0]->compliance());
+	}
 	float Vgoal = params.volume_ratio;
 #else
 	initDensities(1);
@@ -1094,7 +1115,7 @@ void TestSuit::testDistributeForceOpt_MMA(void)
 
 	std::vector<float> tmodipm;
 
-	double Md = 1, MdThres = 0.08;
+	double Md = 1, MdThres = 0.01; // Md越小，中间密度越少
 
 	int ne = grids[0]->n_rho();
     
@@ -1127,18 +1148,56 @@ void TestSuit::testDistributeForceOpt_MMA(void)
 		while (rel_res > 1e-2 && femit++ < 50) {
 			rel_res = grids.v_cycle(1, 1);  //Solving FEM and updating U here, but where to update K? maybe in update_stencil();
 			                                //Answer: We don't store K, please read sec4.1 in the article for homo3d.
-		
+		}
 		printf("v_cycle done.\n");
 		// printf("-- c5 = %6.4e\n", grids[0]->compliance());
 		double c = grids[0]->compliance();
 		printf("-- c = %6.4e   r = %4.2lf%%  md = %4.2lf%%\n", c, rel_res * 100, Md * 100);
+
+		if((params.cloak == 1 || params.cloak == 2) && itn == 1){
+			for (int i = 0; i < 3; i++){
+				cudaMemcpy(grids[0]->_gbuf.Urest[i], grids[0]->_gbuf.U[i], sizeof(double) * grids[0]->n_gsvertices, cudaMemcpyDeviceToDevice);
+			}
+			double distortion0 = grids[0]->distortion();
+		    printf("-- distortion0 = %6.4e\n", distortion0);
+			// RENINT
+			double* sum0 = (double*)grid::Grid::getTempBuf(sizeof(double) * ne / 100);
+			double Vratio0= parallel_sum_d(grids[0]->getRho(), sum0, ne) / ne;
+			printf("Vrest: V = %f, n = %d \n", Vratio0, ne);
+			printf("RENINT\n");
+			Vgoal *= (1 - params.volume_decrease);
+			Vc = Vgoal - params.volume_ratio;
+			if (Vgoal < params.volume_ratio) Vgoal = params.volume_ratio;
+			double E = params.youngs_modulu;
+			double nu = params.poisson_ratio;
+			// TODO: reinit
+			// initDesignVaribles(params.volume_ratio, E*(1-nu)/((1+nu)*(1-2*nu)), E*nu/((1+nu)*(1-2*nu)), E/((1+nu)*2));
+			grids.setPassive(1);
+
+			update_stencil();  
+			rel_res = 1;
+			femit = 0;
+			while (rel_res > 1e-2 && femit++ < 50) {
+				rel_res = grids.v_cycle(1, 1);  
+			}
+			double c = grids[0]->compliance();
+			printf("-- c = %6.4e   r = %4.2lf%%  md = %4.2lf%%\n", c, rel_res * 100, Md * 100);
+			double* sum1 = (double*)grid::Grid::getTempBuf(sizeof(double) * ne / 100);
+			double Vratio1= parallel_sum_d(grids[0]->getRho(), sum1, ne) / ne;
+			printf("Vreinit: V = %f, n = %d \nReInit Done.\n", Vratio1, ne);
+		}
+		// 为什么加上distortion计算后MMA总是ittt=200，而去掉后就只有个位数？？？感觉去掉后才是正常的
+		double distortion = grids[0]->distortion();
+		printf("-- distortion = %6.4e   r = %4.2lf%%  md = %4.2lf%%\n", distortion, rel_res * 100, Md * 100);
+		
 		// std::cout << grids[0]->getDisplacement() << std::endl;
 		if (isnan(c) || abs(c) < 1e-11) { printf("\033[31m-- Error compliance\033[0m\n"); exit(-1); }
 		cRecord.emplace_back(c); volRecord.emplace_back(Vgoal);
 		if (stop_check.update(c, &Vc) && Vgoal <= params.volume_ratio && Md < MdThres) break;
-		if(itn % 10 == 0){
-			grids.log(itn);
-		}
+		grids.log(itn);
+		// if(itn % 10 == 0){
+		// 	grids.log(itn);
+		// }
 		// compute sensitivity
 		computeSensitivity();
 
@@ -1146,57 +1205,142 @@ void TestSuit::testDistributeForceOpt_MMA(void)
 	    float* maxdump = (float*)grid::Grid::getTempBuf(sizeof(float)* ne / 100);
 	    float g_max = parallel_maxabs(grids[0]->getSens(), maxdump, ne);
 	    printf("[sensitivity] max = %f\n", g_max);
+		// compute maximal sensitivity_C11
+	    float* maxdump11 = (float*)grid::Grid::getTempBuf(sizeof(float)* ne / 100);
+	    float g_max11 = parallel_maxabs(grids[0]->getSens_C11(), maxdump11, ne);
+	    printf("[sensitivity_C11*10^7] max = %.10f\n", g_max11*1e7f);
+		// compute maximal sensitivity_C12
+	    float* maxdump12 = (float*)grid::Grid::getTempBuf(sizeof(float)* ne / 100);
+	    float g_max12 = parallel_maxabs(grids[0]->getSens_C12(), maxdump12, ne);
+	    printf("[sensitivity_C12*10^7] max = %.10f\n", g_max12*1e7f);
+		// compute maximal sensitivity_C44
+	    float* maxdump44 = (float*)grid::Grid::getTempBuf(sizeof(float)* ne / 100);
+	    float g_max44 = parallel_maxabs(grids[0]->getSens_C44(), maxdump44, ne);
+	    printf("[sensitivity_C44*10^7] max = %.10f\n", g_max44*1e7f);
+
 		printf("Vgoal = %f\n", Vgoal);
-
-		// update density
-		// updateDensities(Vgoal);
-
-        //  //update density using MMA
-		// // 计算体积分数
-		// // 方法1：nan，不知道为什么会错。 。。。你的rho值get了tempbuffer，都还没有赋值呢，你在求个什么东西？？？
-		// float* rho = (float*)grid::Grid::getTempBuf(sizeof(float)* ne);
-		// float Vratio = dump_array_sum(rho, ne) / ne;
-		// // 方法2：计算正确，但会修改grids[0]->getRho()指向的内容
-		// float* rho = grids[0]->getRho();
-		// float Vratio = dump_array_sum(rho, ne) / ne;
-		//方法3：正确
-		double* sum = (double*)grid::Grid::getTempBuf(sizeof(double) * ne / 100);
-	    double Vratio = parallel_sum_d(grids[0]->getRho(), sum, ne) / ne;
-		printf("Vtest: V = %f, n = %d \n", Vratio, ne);
-
-		// // get gval and dgdx for volfrac constrain
-		// // try1: maybe make error because of ptrs are not on gpu
-		// float gvalval = float(Vratio) / Vgoal - 1;
-		// float* gval = &(gvalval);
-		// float dvdx[ne];
-		// for(int i=0; i<ne; i++){
-		// 	dvdx[i] = 1 / (ne * Vgoal);
-		// }
-		// float *dgdx[1] = {dvdx};
-        // // try2: as a contrast, it makes no error
-		// float *gval = grids[0]->getRho();
-		// float *dgdx[1] = {gval}; 
         
-		float vol_scale = 1.f;
+		// compute constrains for MMA
+		double* sum = (double*)grid::Grid::getTempBuf(sizeof(double) * ne / 100);
+		double Vratio = parallel_sum_d(grids[0]->getRho(), sum, ne) / ne;
+		printf("Vtest: V = %f, n = %d \n", Vratio, ne);
+	
+		float vol_scale = 1000.f;
 		float* gval = (float*)grid::Grid::getTempBuf(sizeof(float));
-		float gvalval[1] = {vol_scale * (float(Vratio) / Vgoal - 1)};
+		// float gvalval[1] = {vol_scale * (float(Vratio) / Vgoal - 1)};
+		float gvalval[1] = {vol_scale * (float(Vratio) - Vgoal)};
 		cudaMemcpy(gval, gvalval, sizeof(float), cudaMemcpyHostToDevice);
 
 		float dvdx_Host[ne];
 		for(int i=0; i<ne; i++){
-			dvdx_Host[i] = vol_scale / (ne * Vgoal);
+			// dvdx_Host[i] = vol_scale / (ne * Vgoal);
+			dvdx_Host[i] = vol_scale / ne;
 		}
 		float* dvdx = (float*)grid::Grid::getTempBuf(sizeof(float) * ne);
 		cudaMemcpy(dvdx, dvdx_Host, ne*sizeof(float), cudaMemcpyHostToDevice);
-        float* dgdx[1] = {dvdx};
+		float* dgdx[1] = {dvdx};
 		
-		// // test dvdx:
-		// float dvdx_Host2[ne];
-		// cudaMemcpy(dvdx_Host2, dvdx, ne*sizeof(float), cudaMemcpyDeviceToHost);
-		// for(int i=0; i<ne; i++){
-		// 	printf("%f\n",dvdx_Host2[i]);
-		// }
-		updateDensities_MMA(1, ne, 1, 0, 1000, 1, itn,  grids[0]->getRho(), grids[0]->getSens(), gval, dgdx);
+		if(params.cloak == 0){
+			updateDensities_MMA(1, ne, 1, 0, 1000, 1, itn,  grids[0]->getRho(), grids[0]->getSens(), gval, dgdx);
+		}
+		else if(params.cloak == 1){
+			// // 错！
+			// // float *x = (float*)grid::Grid::getTempBuf(sizeof(float) * ne * 4);
+			// // float *dfdx = (float*)grid::Grid::getTempBuf(sizeof(float) * ne * 4);
+			// float *x = (float*)grid::Grid::getTempBuf(sizeof(float) * ne);
+			// float *dfdx = (float*)grid::Grid::getTempBuf(sizeof(float) * ne);
+			// cudaMemcpy(x, grids[0]->getRho(), ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			// // cudaMemcpy(x + ne, grids[0]->getC11(), ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			// // cudaMemcpy(x + 2 * ne, grids[0]->getC12(), ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			// // cudaMemcpy(x + 3 * ne, grids[0]->getC44(), ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			// cudaMemcpy(dfdx, grids[0]->getSens(), ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			// // cudaMemcpy(dfdx + ne, grids[0]->getSens_C11(), ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			// // cudaMemcpy(dfdx + 2 * ne, grids[0]->getSens_C12(), ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			// // cudaMemcpy(dfdx + 3 * ne, grids[0]->getSens_C44(), ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			
+			// // updateDensities_MMA(1, 4 * ne, 1, 0, 1000, 1, itn, x, dfdx, gval, dgdx);
+			// updateDensities_MMA(1, ne, 1, 0, 1000, 1, itn, x, dfdx, gval, dgdx);
+
+			// cudaMemcpy(grids[0]->_gbuf.rho_e, x, ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			// // cudaMemcpy(grids[0]->_gbuf.C11_e, x + ne, ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			// // cudaMemcpy(grids[0]->_gbuf.C12_e, x + 2 * ne, ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			// // cudaMemcpy(grids[0]->_gbuf.C44_e, x + 3 * ne, ne * sizeof(float), cudaMemcpyDeviceToDevice);
+            
+			// // 对
+			// updateDensities_MMA(1, ne, 1, 0, 1000, 1, itn,  grids[0]->getRho(), grids[0]->getSens(), gval, dgdx);
+            
+			// // 错
+			// float *dfdx = (float*)grid::Grid::getTempBuf(sizeof(float) * ne);
+			// cudaMemcpy(dfdx, grids[0]->getSens(), ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			// updateDensities_MMA(1, ne, 1, 0, 1000, 1, itn,  grids[0]->getRho(), dfdx, gval, dgdx);
+
+			// // 对
+			// cudaMemcpy(grids[0]->getSens_C11(), grids[0]->getSens(), ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			// updateDensities_MMA(1, ne, 1, 0, 1000, 1, itn,  grids[0]->getRho(), grids[0]->getSens_C11(), gval, dgdx);
+            
+			// 综合上面三个实验，为什么用getTempBuf新建一个指针代替grids[0]->getSens()不行，但用grids[0]->getSens_C11()代替就可以？？？？？？？？？？？
+            
+			cudaMemcpy(grids[0]->getDVs(), grids[0]->getRho(), ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			cudaMemcpy(grids[0]->getDVs() + ne, grids[0]->getC11(), ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			cudaMemcpy(grids[0]->getDVs() + 2 * ne, grids[0]->getC12(), ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			cudaMemcpy(grids[0]->getDVs() + 3 * ne, grids[0]->getC44(), ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			// float x[4*ne];
+			// cudaMemcpy(x, grids[0]->getDVs(), 4 * ne * sizeof(float), cudaMemcpyDeviceToHost);
+			// for(int i=ne;i<ne*4;i++){
+			// 	*(x + i) /= 1e6f;
+			// }
+			// cudaMemcpy(grids[0]->getDVs(), x, 4 * ne * sizeof(float), cudaMemcpyHostToDevice);
+
+			cudaMemcpy(grids[0]->getSens_DVs(), grids[0]->getSens(), ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			cudaMemcpy(grids[0]->getSens_DVs() + ne, grids[0]->getSens_C11(), ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			cudaMemcpy(grids[0]->getSens_DVs() + 2 * ne, grids[0]->getSens_C12(), ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			cudaMemcpy(grids[0]->getSens_DVs() + 3 * ne, grids[0]->getSens_C44(), ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			// float dfdx[4*ne];
+			// cudaMemcpy(x, grids[0]->getSens_DVs(), 4 * ne * sizeof(float), cudaMemcpyDeviceToHost);
+			// for(int i=ne;i<ne*4;i++){
+			// 	*(dfdx + i) /= 1e6f;
+			// }
+			// cudaMemcpy(grids[0]->getSens_DVs(), dfdx, 4 * ne * sizeof(float), cudaMemcpyHostToDevice);
+
+			// int* passive = (int*)grid::Grid::getTempBuf(sizeof(int) * ne);
+			// cudaMemcpy(passive, grids[0]->getPassive(), ne * sizeof(int), cudaMemcpyDeviceToDevice);
+			updateDensities_MMA(1, 4 * ne, 1, 0, 1000, 1, itn,  grids[0]->getDVs(), grids[0]->getSens_DVs(), gval, dgdx);
+			printf("updateDensities_MMA done.\n");
+
+			// int passive[ne];
+			// cudaMemcpy(passive, grids[0]->getPassive(), ne * sizeof(int), cudaMemcpyDeviceToHost);
+
+			// float x1[4*ne];
+			// cudaMemcpy(x1, grids[0]->getDVs(), 4 * ne * sizeof(float), cudaMemcpyDeviceToHost);
+			// for(int i=0;i<ne;i++){
+			// 	if(passive[i] == 1) {
+			// 		x1[i] = 0.f;
+			// 		printf("passive==1\n");
+			// 	}
+			// }
+			// cudaMemcpy(grids[0]->getDVs(), x1, 4 * ne * sizeof(float), cudaMemcpyHostToDevice);
+			// printf("cudaMemcpyDeviceToHost_x1 done.\n");  //Segmentation fault (core dumped) 为什么！！！！！！！！！！！！！！！
+			// for(int i=ne;i<ne*4;i++){
+			// 	*(x1 + i) *= 1e6f;
+			// 	printf("%f, ",*(x1 + i));
+			// }
+			// cudaMemcpy(grids[0]->getDVs(), x1, 4 * ne * sizeof(float), cudaMemcpyHostToDevice);
+
+			cudaMemcpy(grids[0]->getRho(), grids[0]->getDVs(), ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			cudaMemcpy(grids[0]->getC11(), grids[0]->getDVs() + ne, ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			cudaMemcpy(grids[0]->getC12(), grids[0]->getDVs() + 2 * ne, ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			cudaMemcpy(grids[0]->getC44(), grids[0]->getDVs() + 3 * ne, ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			// cudaMemcpy(grids[0]->getSens(), grids[0]->getSens_DVs(), ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			// cudaMemcpy(grids[0]->getSens_C11(), grids[0]->getSens_DVs() + ne, ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			// cudaMemcpy(grids[0]->getSens_C12(), grids[0]->getSens_DVs() + 2 * ne, ne * sizeof(float), cudaMemcpyDeviceToDevice);
+			// cudaMemcpy(grids[0]->getSens_C44(), grids[0]->getSens_DVs() + 3 * ne, ne * sizeof(float), cudaMemcpyDeviceToDevice);
+
+			// 可以尝试把rho和Cxx分开迭代优化：尝试用OC优化rho，再用MMA优化Cxx。  但这样对力学隐身问题不一定好，想不出来rho会怎么变化。
+		}
+		// double* sumafter = (double*)grid::Grid::getTempBuf(sizeof(double) * ne / 100);
+		// double Vratioafter = parallel_sum_d(grids[0]->getRho(), sumafter, ne) / ne;
+		// printf("Vtest_afterMMA: V = %f, n = %d \n", Vratioafter, ne);
+		
 		
 
 		// // compute volume
@@ -1215,8 +1359,8 @@ void TestSuit::testDistributeForceOpt_MMA(void)
 	printf("\n=   finished???   =\n");
 
 	// write result density field
-	// grids.writeDensity(grids.getPath("out.vdb"));
-	grids.writeDensity2txt(grids.getPath("out.txt"));
+	grids.writeDensity(grids.getPath("out.vdb"));
+	// grids.writeDensity2txt(grids.getPath("out.txt"));
 
 	printf("\n=   finished.   =\n");
     
@@ -1242,8 +1386,15 @@ void TestSuit::testDistributeForceOpt_OC(void)
 	grids.writeSupportForce(grids.getPath("fs"));
 
 #if 1
-	// initDensities(params.volume_ratio);
-	initDesignVaribles(params.volume_ratio);
+    if(params.cloak == 0){
+		initDensities(params.volume_ratio);
+	}
+	else if(params.cloak == 1){
+		double E = params.youngs_modulu;
+		double nu = params.poisson_ratio;
+		initDesignVaribles(params.volume_ratio, E*(1-nu)/((1+nu)*(1-2*nu)), E*nu/((1+nu)*(1-2*nu)), E/((1+nu)*2));
+		// initDesignVaribles(params.volume_ratio,0.9,0.9,0.9);
+	}
 	float Vgoal = params.volume_ratio;
 #else
 	initDensities(1);
@@ -1300,8 +1451,8 @@ void TestSuit::testDistributeForceOpt_OC(void)
     printf("\n=   finished???   =\n");
 
 	// write result density field
-	// grids.writeDensity(grids.getPath("out.vdb"));
-	grids.writeDensity2txt(grids.getPath("out.txt"));
+	grids.writeDensity(grids.getPath("out.vdb"));
+	// grids.writeDensity2txt(grids.getPath("out.txt"));
 
 	printf("\n=   finished.   =\n");
     

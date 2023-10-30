@@ -444,16 +444,8 @@ void HierarchyGrid::restrict_stencil_dyadic(Grid& dstcoarse, Grid& srcfine, int 
 	}
 	else {
 		make_kernel_param(&grid_size, &block_size, dstcoarse.n_gsvertices * 9, BlockSize);
-		printf("\n\033[33m-- restrict_stencil_dyadic_kernel --\n\033[0m");
+		// printf("\n\033[33m-- restrict_stencil_dyadic_kernel --\n\033[0m");
 		restrict_stencil_dyadic_kernel<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rxStencil);
-		// if(cloak == 0){
-		// 	printf("\n\033[33m-- restrict_stencil_dyadic_kernel --\n\033[0m");
-		//     restrict_stencil_dyadic_kernel<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rxStencil);
-		// }
-		// else if(cloak == 1){
-		// 	printf("\n\033[33m-- restrict_stencil_dyadic_kernel_cloak1 --\n\033[0m");
-		//     restrict_stencil_dyadic_kernel_cloak1<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rxStencil);
-		// }
 		
 		cudaDeviceSynchronize();
 		cuda_error_check;
@@ -939,11 +931,11 @@ void HierarchyGrid::restrict_stencil_nondyadic(Grid& dstcoarse, Grid& srcfine, i
 	}
 	else if (_mode == with_support_constrain_force_direction || _mode == with_support_free_force) {
 		if(cloak == 0){
-			printf("\n\033[33m-- restrict_stencil_nondyadic_OTFA_WS_kernel --\n\033[0m");
+			// printf("\n\033[33m-- restrict_stencil_nondyadic_OTFA_WS_kernel --\n\033[0m");
 		    restrict_stencil_nondyadic_OTFA_WS_kernel<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rho_e, srcfine._gbuf.vBitflag);
 		}
 		else if(cloak == 1){
-			printf("\n\033[33m-- restrict_stencil_nondyadic_OTFA_WS_kernel_cloak1 --\n\033[0m");
+			// printf("\n\033[33m-- restrict_stencil_nondyadic_OTFA_WS_kernel_cloak1 --\n\033[0m");
 		    restrict_stencil_nondyadic_OTFA_WS_kernel_cloak1<BlockSize> << <grid_size, block_size >> > (dstcoarse.n_gsvertices, dstcoarse._gbuf.rxStencil, srcfine.n_gsvertices, srcfine._gbuf.rho_e, srcfine._gbuf.C11_e, srcfine._gbuf.C12_e, srcfine._gbuf.C44_e, srcfine._gbuf.vBitflag);
 		}
 	}
@@ -1811,21 +1803,21 @@ void Grid::gs_relax(int n_times)
 				make_kernel_param(&grid_size, &block_size, gs_num[i] * 8, BlockSize);
 				if (_mode == no_support_constrain_force_direction || _mode == no_support_free_force) {
 					if(gridparams.cloak == 0){
-			            printf("gs_relax_OTFA_NS_kernel\n");
+			            // printf("gs_relax_OTFA_NS_kernel\n");
 		                gs_relax_OTFA_NS_kernel<BlockSize> << <grid_size, block_size >> > (gs_num[i], gs_offset, _gbuf.rho_e);
 		            }
 		            else if(gridparams.cloak == 1){
-			            printf("gs_relax_OTFA_NS_kernel_cloak1\n");
+			            // printf("gs_relax_OTFA_NS_kernel_cloak1\n");
 		                gs_relax_OTFA_NS_kernel_cloak1<BlockSize> << <grid_size, block_size >> > (gs_num[i], gs_offset, _gbuf.rho_e, _gbuf.C11_e, _gbuf.C12_e, _gbuf.C44_e);
 		            }           
 				}
 				else if (_mode == with_support_constrain_force_direction || _mode == with_support_free_force) {
 					if(gridparams.cloak == 0){
-			            printf("gs_relax_OTFA_WS_kernel\n");
+			            // printf("gs_relax_OTFA_WS_kernel\n");
 		                gs_relax_OTFA_WS_kernel<BlockSize> << <grid_size, block_size >> > (gs_num[i], gs_offset, _gbuf.rho_e);
 		            }
 		            else if(gridparams.cloak == 1){
-			            printf("gs_relax_OTFA_WS_kernel_cloak1\n");
+			            // printf("gs_relax_OTFA_WS_kernel_cloak1\n");
 		                gs_relax_OTFA_WS_kernel_cloak1<BlockSize> << <grid_size, block_size >> > (gs_num[i], gs_offset, _gbuf.rho_e, _gbuf.C11_e, _gbuf.C12_e, _gbuf.C44_e);
 		            }   
 				}
@@ -2618,11 +2610,11 @@ void Grid::update_residual(void)
 		if (_mode == no_support_constrain_force_direction || _mode == no_support_free_force) {
 			make_kernel_param(&grid_size, &block_size, n_gsvertices, 512);
 			if(gridparams.cloak == 0){
-				printf("update_residual_OTFA_NS_kernel\n");
+				// printf("update_residual_OTFA_NS_kernel\n");
 				update_residual_OTFA_NS_kernel << <grid_size, block_size >> > (n_gsvertices, _gbuf.rho_e);
 			}  
 			else if(gridparams.cloak == 1 || gridparams.cloak == 1){
-				printf("update_residual_OTFA_NS_kernel_cloak1\n");
+				// printf("update_residual_OTFA_NS_kernel_cloak1\n");
 				update_residual_OTFA_NS_kernel_cloak1 << <grid_size, block_size >> > (n_gsvertices, _gbuf.rho_e, _gbuf.C11_e, _gbuf.C12_e, _gbuf.C44_e);
 			}
 		}
@@ -2630,11 +2622,11 @@ void Grid::update_residual(void)
 #if 1
 			make_kernel_param(&grid_size, &block_size, n_gsvertices, 256);
 			if(gridparams.cloak == 0){
-				printf("update_residual_OTFA_WS_kernel\n");
+				// printf("update_residual_OTFA_WS_kernel\n");
 				update_residual_OTFA_WS_kernel << <grid_size, block_size >> > (n_gsvertices, _gbuf.rho_e);
 			}  
 			else if(gridparams.cloak == 1 || gridparams.cloak == 1){
-				printf("update_residual_OTFA_WS_kernel_cloak1\n");
+				// printf("update_residual_OTFA_WS_kernel_cloak1\n");
 				update_residual_OTFA_WS_kernel_cloak1 << <grid_size, block_size >> > (n_gsvertices, _gbuf.rho_e, _gbuf.C11_e, _gbuf.C12_e, _gbuf.C44_e);
 			}
 #else
@@ -2651,7 +2643,7 @@ void Grid::update_residual(void)
 		update_residual_kernel << <grid_size, block_size >> > (n_gsvertices, _gbuf.rxStencil);
 #else
 		make_kernel_param(&grid_size, &block_size, n_gsvertices * 13, 32 * 13);
-		printf("update_residual_kernel_1\n");
+		// printf("update_residual_kernel_1\n");
 		update_residual_kernel_1 << <grid_size, block_size >> > (n_gsvertices, _gbuf.rxStencil);
 
 #endif
@@ -3181,6 +3173,111 @@ void Grid::v3_add(double alpha, double* a[3], double beta, double* b[3])
 	cuda_error_check;
 }
 
+void Grid::v3_Uminus(double* dst[3], float* rho, double* a[3], double* b[3], int* passive)
+{
+	double* ax = a[0], *ay = a[1], *az = a[2];
+	double* bx = b[0], *by = b[1], *bz = b[2];
+	double* dstx = dst[0], *dsty = dst[1], *dstz = dst[2];
+	// float power = power_penalty[0];
+	// float power = 3.0f;  //TODO_yyy: how to control it?
+	size_t grid_dim, block_dim;
+	make_kernel_param(&grid_dim, &block_dim, n_gsvertices, 512);
+	map << <grid_dim, block_dim >> > (n_nodes(), [=]__device__(int tid) { 
+		int eid = gV2E[7][tid]; 
+		dstx[tid] = (1 - passive[eid]) * (1 - rho[eid]) * (ax[tid] - bx[tid]); 
+		// dstx[tid] = (1 - _gbuf.passive[0]) * (1 - powf(rho[0], power)) * (ax[tid] - bx[tid]); //trial5，false
+		// dstx[tid] = (ax[tid] - bx[tid]); //trial6，true
+		// dstx[tid] = double((1 - powf(rho[0], power))) * (ax[tid] - bx[tid]); //trial7,true
+		// dstx[tid] = double((1 - _gbuf.passive[0])) * double((1 - powf(rho[0], power))) * (ax[tid] - bx[tid]); //trial8, false
+		// dstx[tid] = double((1 - powf(_gbuf.rho_e[0], power))) * (ax[tid] - bx[tid]); //trial9, false
+		});
+	cudaDeviceSynchronize();
+	cuda_error_check;
+
+	map << <grid_dim, block_dim >> > (n_nodes(), [=]__device__(int tid) { 
+		int eid = gV2E[7][tid]; 
+		dsty[tid] = double(1 - passive[eid]) * double(1 - rho[eid]) * (ay[tid] - by[tid]); 
+		// dsty[tid] = (1 - _gbuf.passive[0]) * (1 - powf(rho[0], power)) * (ay[tid] - by[tid]); //trial5，false
+		// dsty[tid] = (ay[tid] - by[tid]); //trial6，true
+		// dsty[tid] = double((1 - powf(rho[0], power))) * (ay[tid] - by[tid]); //trial7,true
+		// dsty[tid] = double((1 - _gbuf.passive[0])) * double((1 - powf(rho[0], power))) * (ay[tid] - by[tid]); //trial8, false
+		// dsty[tid] = double((1 - powf(_gbuf.rho_e[0], power))) * (ay[tid] - by[tid]); //trial9, false
+		});
+	cudaDeviceSynchronize();
+	cuda_error_check;
+
+	map << <grid_dim, block_dim >> > (n_nodes(), [=]__device__(int tid) { 
+		int eid = gV2E[7][tid]; 
+		dstz[tid] = (1 - passive[eid]) * (1 - rho[eid]) * (az[tid] - bz[tid]); 
+		// dstz[tid] = (1 - _gbuf.passive[0]) * (1 - powf(rho[0], power)) * (az[tid] - bz[tid]); //trial5，false
+		// dstz[tid] = (az[tid] - bz[tid]); //trial6，true
+		// dstz[tid] = double((1 - powf(rho[0], power))) * (az[tid] - bz[tid]); //trial7,true
+		// dstz[tid] = double((1 - _gbuf.passive[0])) * double((1 - powf(rho[0], power))) * (az[tid] - bz[tid]); //trial8, false
+		// dstz[tid] = double((1 - powf(_gbuf.rho_e[0], power))) * (az[tid] - bz[tid]); //trial9, false
+		});
+	cudaDeviceSynchronize();
+	cuda_error_check;
+}
+
+void Grid::v3_Uminus0(double* dst[3], float* rho, double* a[3], int* passive)
+{
+	double* ax = a[0], *ay = a[1], *az = a[2];
+	double* dstx = dst[0], *dsty = dst[1], *dstz = dst[2];
+	// float power = power_penalty[0];
+	// printf("power = %f\n", power); //power = 0.000000?????????
+	// float power = 3.0f;  //TODO_yyy: how to control it?
+	size_t grid_dim, block_dim;
+	make_kernel_param(&grid_dim, &block_dim, n_gsvertices, 512);
+	map << <grid_dim, block_dim >> > (n_nodes(), [=]__device__(int tid) { 
+		int eid = gV2E[7][tid]; 
+		dstx[tid] = (1 - passive[eid]) * (1 - rho[eid]) * (ax[tid]); 
+		});
+	cudaDeviceSynchronize();
+	cuda_error_check;
+
+	map << <grid_dim, block_dim >> > (n_nodes(), [=]__device__(int tid) { 
+		int eid = gV2E[7][tid]; 
+		dsty[tid] = (1 - passive[eid]) * (1 - rho[eid]) * (ay[tid]); 
+		});
+	cudaDeviceSynchronize();
+	cuda_error_check;
+
+	map << <grid_dim, block_dim >> > (n_nodes(), [=]__device__(int tid) { 
+		int eid = gV2E[7][tid]; 
+		dstz[tid] = (1 - passive[eid]) * (1 - rho[eid]) * (az[tid]); 
+		});
+	cudaDeviceSynchronize();
+	cuda_error_check;
+}
+
+
+double Grid::v3_normUminus(float* rho, double* a[3], double* b[3], int* passive)
+{
+	// double* dst[3];
+	// Grid::getTempBufArray(dst, 3, n_gsvertices);
+	// v3_Uminus(dst, rho, a, b, passive);
+	// return v3_norm(dst);
+
+	devArray_t<double*, 3> Udiff;
+	Udiff.create(n_gsvertices);
+	v3_Uminus(Udiff._data, rho, a, b, passive);
+	return(v3_norm(Udiff._data));
+}
+
+
+double Grid::v3_normUminus0(float* rho, double* a[3], int* passive)
+{
+	// double* dst[3];
+	// Grid::getTempBufArray(dst, 3, n_gsvertices);
+	// v3_Uminus0(dst, rho, a, passive);
+	// return v3_norm(dst);
+
+	devArray_t<double*, 3> U0;
+	U0.create(n_gsvertices);
+	v3_Uminus0(U0._data, rho, a, passive);
+	return(v3_norm(U0._data));
+}
+
 double Grid::v3_dot(double* v[3], double* u[3])
 {
 	double* tmp = (double*)getTempBuf(n_gsvertices / 100 * sizeof(double));
@@ -3390,6 +3487,7 @@ __global__ void filterSensitivity_kernel(int nebitword, gBitSAT<unsigned int> es
 
 	
 }
+
 
 void Grid::filterSensitivity_origin(double radii)
 {
@@ -4210,14 +4308,15 @@ void Grid::init_rho(double rh0)
 void Grid::init_design_variable(double rh0, double C11_0, double C12_0, double C44_0)
 {
 	init_array(_gbuf.rho_e, float(rh0), n_rho());
-	printf("rho_e inited! \n");
+	// printf("rho_e inited! \n");
 	init_array(_gbuf.C11_e, float(C11_0), n_rho());
-	printf("C11 inited\n");  //??????? CUDA error occured at line 374 in file /home/yyy/Projects/robtop/culib/lib.cuh, error type cudaErrorIllegalAddress 
+	// printf("C11 inited\n");  //??????? CUDA error occured at line 374 in file /home/yyy/Projects/robtop/culib/lib.cuh, error type cudaErrorIllegalAddress 
 	                         //没有在grid.cpp的build函数里为Cxx_e分配内存
 	init_array(_gbuf.C12_e, float(C12_0), n_rho());
-	printf("C12 inited\n");
+	// printf("C12 inited\n");
 	init_array(_gbuf.C44_e, float(C44_0), n_rho());
-	printf("C44 inited\n");
+	// printf("C44 inited\n");
+	init_array(_gbuf.passive, int(0), n_rho());
 }
 
 __global__ void computeNodePos_kernel(int n_word, int vreso, gBitSAT<unsigned int> vrtsat, devArray_t<double, 3> orig, double eh, devArray_t<double*, 3> pos) {
@@ -4802,11 +4901,11 @@ void grid::Grid::elementCompliance(double* u[3], double* f[3], float* dst)
 	size_t grid_size, block_size;
 	make_kernel_param(&grid_size, &block_size, n_gsvertices, 512);
 	if(gridparams.cloak == 0){
-		printf("elementCompliance_kernel\n");
+		// printf("elementCompliance_kernel\n");
 		elementCompliance_kernel << <grid_size, block_size >> > (n_gsvertices, ulist, flist, _gbuf.rho_e, dst);
 	}
 	else if(gridparams.cloak == 1 || gridparams.cloak == 2 ){
-		printf("elementCompliance_kernel_cloak1\n");
+		// printf("elementCompliance_kernel_cloak1\n");
 		elementCompliance_kernel_cloak1 << <grid_size, block_size >> > (n_gsvertices, ulist, flist, _gbuf.rho_e, _gbuf.C11_e, _gbuf.C12_e, _gbuf.C44_e, dst);
 	}
 	

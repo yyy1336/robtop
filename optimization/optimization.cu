@@ -61,12 +61,14 @@ __global__ void computeSensitivity_kernel(int nv, float* rholist, double mu, flo
 		vneigh[i] = gV2V[i][vid];
 		// printf("gV2V[%d][%d] = %d\n", i, vid, vneigh[i]);
 	}
-
+    
+	// int maxeid = 0;
 	// traverse incident elements of vertex
 	for (int i = 0; i < 8; i++) {
 		double partialSens = 0;
 
 		int eid = gV2E[i][vid];
+		// if(eid > maxeid) maxeid = eid;
 		// printf("gV2E[%d][%d] = %d\n", i, vid, eid);
 		if (eid == -1) continue;
 		double Ui[3] = { gU[0][vid],gU[1][vid],gU[2][vid] };
@@ -87,6 +89,7 @@ __global__ void computeSensitivity_kernel(int nv, float* rholist, double mu, flo
 				}
 			}
 		}
+		
 
 		for (int k = 0; k < 3; k++) KrhoU[k] *= penal;
 
@@ -114,19 +117,21 @@ __global__ void computeSensitivity_kernel(int nv, float* rholist, double mu, flo
 		// atomicAdd(sens + 4*eid+2, float(partialSens));
 		// atomicAdd(sens + 4*eid+3, float(partialSens));
 	}
+    // printf("maxeid = %d\n", maxeid);
 }
 
-
-
-
 //  suppose Uworst, Fworst is prepared in U, F
-__global__ void computeSensitivity_kernel_yyy(int nv, float* rholist, double mu, float* sens, float* sens_C11, float* sens_C12, float* sens_C44) {
+__global__ void computeSensitivity_kernel_cloak1(int nv, float* rholist, float* c11list, float* c12list, float* c44list, double mu, float* sens, float* sens_C11, float* sens_C12, float* sens_C44) {
 	//nv: n_nodes
 	int tid = blockDim.x*blockIdx.x + threadIdx.x;
 
-	__shared__ double KE[24][24];
+	__shared__ double KE11[24][24]; 
+	__shared__ double KE12[24][24]; 
+	__shared__ double KE44[24][24]; 
 
-	loadTemplateMatrix(KE, 0);
+	loadTemplateMatrix(KE11,1);
+	loadTemplateMatrix(KE12,2);
+	loadTemplateMatrix(KE44,3);
 
 	if (tid >= nv) return;
 
@@ -141,30 +146,55 @@ __global__ void computeSensitivity_kernel_yyy(int nv, float* rholist, double mu,
 	// traverse incident elements of vertex
 	for (int i = 0; i < 8; i++) {
 		double partialSens = 0;
+		double partialSens11 = 0;
+		double partialSens12 = 0;
+		double partialSens44 = 0;
 
 		int eid = gV2E[i][vid];
 		// printf("gV2E[%d][%d] = %d\n", i, vid, eid);
 		if (eid == -1) continue;
 		double Ui[3] = { gU[0][vid],gU[1][vid],gU[2][vid] };
 		double penal = power_penalty[0] * powf(rholist[eid], power_penalty[0] - 1);
+		double penal0 = powf(rholist[eid], power_penalty[0]);
+		double c11 = c11list[eid];
+		double c12 = c12list[eid];
+		double c44 = c44list[eid];
 
 		// compute partial node force (element i's contribution) K_\rho * Uworst on vi
 		double KrhoU[3] = { 0. };
+		double Kc11U[3] = { 0. };
+		double Kc12U[3] = { 0. };
+		double Kc44U[3] = { 0. };
 		// vertex self id in neihbor element i
 		int vi = 7 - i;
 		// vertex neighbor id in element i, traverse them and compute the corresponding node force on self
+#if 0
 		for (int vj = 0; vj < 8; vj++) {
 			int vjlid = gridPos2id<3>(i % 2 + vj % 2, i % 4 / 2 + vj % 4 / 2, i / 4 + vj / 4);
 			double Uj[3];
 			for (int k = 0; k < 3; k++) Uj[k] = gU[k][vneigh[vjlid]];
 			for (int krow = 0; krow < 3; krow++) {
 				for (int kcol = 0; kcol < 3; kcol++) {
-					KrhoU[krow] += KE[vi * 3 + krow][vj * 3 + kcol] * Uj[kcol];
+					KrhoU[krow] += (c11 * KE11[vi * 3 + krow][vj * 3 + kcol] * Uj[kcol] + \
+					                c12 * KE12[vi * 3 + krow][vj * 3 + kcol] * Uj[kcol] + c44 * KE44[vi * 3 + krow][vj * 3 + kcol] * Uj[kcol]);
+					// Kc11U[krow] += (c11 * KE11[vi * 3 + krow][vj * 3 + kcol] * Uj[kcol] + \
+					//                 c12 * KE12[vi * 3 + krow][vj * 3 + kcol] * Uj[kcol] + c44 * KE44[vi * 3 + krow][vj * 3 + kcol] * Uj[kcol]);
+				    // 感觉这里的公式推错了。。。
+					// 增加位数输出了一下：[sensitivity_C11] max = 0.0000000024863162639832125933025963604450225830078125000000000000000000000000000000000000000000000000
+				    // 可见并没有算错，由于c11，c12，c44很大（~1e6），由灵敏度公式，他们的灵敏度确实要比rho的灵敏度小很多，这也说明应该归一化
+					Kc11U[krow] += KE11[vi * 3 + krow][vj * 3 + kcol] * Uj[kcol];
+					Kc12U[krow] += KE12[vi * 3 + krow][vj * 3 + kcol] * Uj[kcol];
+					Kc44U[krow] += KE44[vi * 3 + krow][vj * 3 + kcol] * Uj[kcol];
 				}
 			}
 		}
 
-		for (int k = 0; k < 3; k++) KrhoU[k] *= penal;
+		for (int k = 0; k < 3; k++){
+			KrhoU[k] *= penal;
+			Kc11U[k] *= penal0;
+			Kc12U[k] *= penal0;
+			Kc44U[k] *= penal0;
+		} 
 
 #if 0
 		// sensitivity  u_worst * dK/drho * u_worst
@@ -179,19 +209,55 @@ __global__ void computeSensitivity_kernel_yyy(int nv, float* rholist, double mu,
 		}
 #else
 		// sensitivity  - u_worst * dK/drho * u_worst
-		for (int k = 0; k < 3; k++) partialSens -= Ui[k] * KrhoU[k];
+		for (int k = 0; k < 3; k++){
+			partialSens -= Ui[k] * KrhoU[k];
+			partialSens11 -= Ui[k] * Kc11U[k];
+			partialSens12 -= Ui[k] * Kc12U[k];
+			partialSens44 -= Ui[k] * Kc44U[k];
+		} 
 
+#endif
+#else
+for (int vj = 0; vj < 8; vj++) {
+			int vjlid = gridPos2id<3>(i % 2 + vj % 2, i % 4 / 2 + vj % 4 / 2, i / 4 + vj / 4);
+			double Uj[3];
+			for (int k = 0; k < 3; k++) Uj[k] = gU[k][vneigh[vjlid]];
+			for (int krow = 0; krow < 3; krow++) {
+				for (int kcol = 0; kcol < 3; kcol++) {
+					KrhoU[krow] += (c11 * KE11[vi * 3 + krow][vj * 3 + kcol] * Uj[kcol] + \
+					                c12 * KE12[vi * 3 + krow][vj * 3 + kcol] * Uj[kcol] + c44 * KE44[vi * 3 + krow][vj * 3 + kcol] * Uj[kcol]);
+					Kc11U[krow] += KE11[vi * 3 + krow][vj * 3 + kcol] * Uj[kcol];
+					Kc12U[krow] += KE12[vi * 3 + krow][vj * 3 + kcol] * Uj[kcol];
+					Kc44U[krow] += KE44[vi * 3 + krow][vj * 3 + kcol] * Uj[kcol];
+				}
+			}
+		}
+
+		for (int k = 0; k < 3; k++){
+			KrhoU[k] *= penal;
+			Kc11U[k] *= penal0;
+			Kc12U[k] *= penal0;
+			Kc44U[k] *= penal0;
+		} 
+		// sensitivity  - u_worst * dK/drho * u_worst
+		for (int k = 0; k < 3; k++){
+			partialSens -= Ui[k] * KrhoU[k];
+			partialSens11 -= Ui[k] * Kc11U[k];
+			partialSens12 -= Ui[k] * Kc12U[k];
+			partialSens44 -= Ui[k] * Kc44U[k];
+		} 
 #endif
 
 		atomicAdd(sens + eid, float(partialSens));
-		atomicAdd(sens_C11 + eid, float(partialSens));
-		atomicAdd(sens_C12 + eid, float(partialSens));
-		atomicAdd(sens_C44 + eid, float(partialSens));
-		// TODO_yyy
-		// atomicAdd(sens + 4*eid, float(partialSens));
-		// atomicAdd(sens + 4*eid+1, float(partialSens));
-		// atomicAdd(sens + 4*eid+2, float(partialSens));
-		// atomicAdd(sens + 4*eid+3, float(partialSens));
+		// atomicAdd(sens_C11 + eid, float(partialSens));
+		atomicAdd(sens_C11 + eid, float(partialSens11));
+		atomicAdd(sens_C12 + eid, float(partialSens12));
+		atomicAdd(sens_C44 + eid, float(partialSens44));
+		// [sensitivity] max = 0.044646
+        // [sensitivity_C11] max = 0.044646
+		// [sensitivity_C12] max = 0.000000
+		// [sensitivity_C44] max = 0.000000
+		// 这说明partialSensxx没算对，可能全都是0；
 	}
 }
 
@@ -206,12 +272,17 @@ void computeSensitivity(void) {
 
 	size_t grid_size, block_size;
 	make_kernel_param(&grid_size, &block_size, grids[0]->n_nodes(), 512);
-
-	// computeSensitivity_kernel << <grid_size, block_size >> > (grids[0]->n_nodes(), grids[0]->getRho(), grids[0]->_keyvalues["mu"], grids[0]->getSens());
-	
-	computeSensitivity_kernel_yyy << <grid_size, block_size >> > (grids[0]->n_nodes(), grids[0]->getRho(), grids[0]->_keyvalues["mu"], \
+    if(params.cloak == 0){
+		// printf("computeSensitivity_kernel\n");
+		computeSensitivity_kernel << <grid_size, block_size >> > (grids[0]->n_nodes(), grids[0]->getRho(), grids[0]->_keyvalues["mu"], grids[0]->getSens());
+	}
+	else if(params.cloak == 1 ||params.cloak == 2){
+		// printf("computeSensitivity_kernel_cloak1\n");
+		computeSensitivity_kernel_cloak1 << <grid_size, block_size >> > (grids[0]->n_nodes(), grids[0]->getRho(), grids[0]->getC11(), grids[0]->getC12(), grids[0]->getC44(), grids[0]->_keyvalues["mu"], \
 	                                                              grids[0]->getSens(), grids[0]->getSens_C11(), grids[0]->getSens_C12(), grids[0]->getSens_C44());
-
+	}
+	
+	
 	cudaDeviceSynchronize();
 	cuda_error_check;
 

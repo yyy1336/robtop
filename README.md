@@ -222,3 +222,17 @@ float* gval = (float*)grid::Grid::getTempBuf(sizeof(float));
 cudaMemcpy(dst, src, size, cudaMemcpyHostToDevice);
 cudaMemcpy(dst, src, size, cudaMemcpyDeviceToHost);
 ```
+
+6.
+```
+	// double* dst[3];
+	// Grid::getTempBufArray(dst, 3, n_gsvertices);
+	// v3_Uminus(dst, rho, a, b, passive);
+	// return v3_norm(dst);
+
+	devArray_t<double*, 3> Udiff;
+	Udiff.create(n_gsvertices);
+	v3_Uminus(Udiff._data, rho, a, b, passive);
+	return(v3_norm(Udiff._data));
+```
+上面这两种方式有何不同？第一种似乎会在内存上出点问题。

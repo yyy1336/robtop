@@ -84,7 +84,7 @@ void uploadTemplateMatrix(void);
 
 void initDensities(double rho);
 
-void initDesignVaribles(double rho);
+void initDesignVaribles(double rho, double C11, double C12, double C44);
 
 void update_stencil(void);
 

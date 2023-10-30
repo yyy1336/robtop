@@ -12,6 +12,7 @@
 #include "culib2/lib.cuh"
 #include <tuple>
 #include "mmaOptimizer.h"
+#include "optimization.h"
 
 using namespace culib2;
 //#define DEBUG_MMA_OPT
@@ -21,7 +22,7 @@ using namespace culib2;
 //int mma_iter;
 
 extern void solveLinearHost(int nconstrain, const double* Alamhost, const double* ahost, double zet, double z, const double* bb, double* xhost);
-
+extern Parameter params;
 
 void test_gVector(void)
 {
@@ -1133,8 +1134,65 @@ void test_extern(void) {
 void updateDensities_MMA(int nconstrain, int nvar, double a0, double a, double c, double d, int iter, \
                          float* x, float* dfdx, float* gval, float** dgdx) {
     homo::MMAOptimizer mma(nconstrain, nvar, a0, a, c, d);
-	mma.setBound(0.001, 1);
-	// printf("mma: a0=%.4f, a=%.4f ,c=%.4f ,d=%.4f ,nvar=%d, nconstrain=%d\n", \
-	//         mma.a0, mma.a, mma.c, mma.d, mma.n, mma.m);
+	printf("mma: a0=%.4f, a=%.4f ,c=%.4f ,d=%.4f ,nvar=%d, nconstrain=%d\n", \
+	        mma.a0, mma.a, mma.c, mma.d, mma.n, mma.m);
+	if(params.cloak ==0){
+		mma.setBound(0.001, 1);
+	}
+	else if(params.cloak == 1){
+		// int ne = nvar/4;
+		// float* xmin = (float*)grid::Grid::getTempBuf(sizeof(float) * nvar);
+		// float* xmax = (float*)grid::Grid::getTempBuf(sizeof(float) * nvar);
+		// cudaMemset(xmin, 0.001f, nvar);
+		// cudaMemset(xmax, 1.f, nvar);
+		// cudaMemset(xmax+ ne, 1e6f, nvar);
+		// cudaMemset(xmax+ 2 * ne, 1e6f, nvar);
+		// cudaMemset(xmax+ 3 * ne, 1e6f, nvar);
+		// mma.setBound(xmin, xmax);
+		mma.setBound(0.001, 1);
+		float xhost[nvar];
+		float dfdxhost[nvar];
+		// float xhost2[nvar];
+		// printf("--------------\n");
+		cudaMemcpy(xhost, x, nvar * sizeof(float), cudaMemcpyDeviceToHost);
+		// cudaMemcpy(xhost, grids[0]->getDVs(), nvar * sizeof(float), cudaMemcpyDeviceToHost);
+		cudaMemcpy(dfdxhost, dfdx, nvar * sizeof(float), cudaMemcpyDeviceToHost);
+		// cudaMemcpy(xhost2, x, nvar * sizeof(float), cudaMemcpyDeviceToHost);
+		// 改xhost就可以，用一模一样的方式新定义一个xhost2就不可以，太特么神秘了
+		// 可能是内存不足了，因为把分辨率改小就没问题了。。。。  无语，搞了一天居然是这个问题。
+		// printf("000000000\n");
+		int passivehost[nvar/4];
+		// cudaMemcpy(passivehost, passive, nvar/4 * sizeof(int), cudaMemcpyDeviceToHost);
+		cudaMemcpy(passivehost, grids[0]->getPassive(), nvar/4 * sizeof(int), cudaMemcpyDeviceToHost);
+		//Segmentation fault (core dumped)    WHYWHYWHYWHYWHYWHYWHYWHY！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！
+		// printf("111111111\n");
+		for(int i=nvar/4; i<nvar; i++){
+			xhost[i] /= 3e6f;
+			dfdxhost[i] *= 3e6f;
+		}
+		for(int i=0; i < nvar/4; i++){
+			if(passivehost[i] == 1){
+				xhost[i] = 0;
+			}
+		}
+		cudaMemcpy(x, xhost, nvar * sizeof(float), cudaMemcpyHostToDevice);
+		cudaMemcpy(dfdx, dfdxhost, nvar * sizeof(float), cudaMemcpyHostToDevice);
+	}
+	
+	
+	// Segmentation fault (core dumped) 不能这样做乘法。 CUDA的原子操作有乘法吗？
 	mma.update(iter, x, dfdx, gval, dgdx);
+	if(params.cloak == 1){
+		float xhost1[nvar];
+		// float dfdxhost1[nvar];
+		cudaMemcpy(xhost1, x, nvar * sizeof(float), cudaMemcpyDeviceToHost);
+		// cudaMemcpy(dfdxhost1, dfdx, nvar * sizeof(float), cudaMemcpyDeviceToHost);
+		for(int i=nvar/4; i<nvar; i++){
+			xhost1[i] *= 3e6f;
+			// dfdxhost1[i] *= 1e6f;
+		}
+		cudaMemcpy(x, xhost1, nvar * sizeof(float), cudaMemcpyHostToDevice);
+		// cudaMemcpy(dfdx, dfdxhost1, nvar * sizeof(float), cudaMemcpyHostToDevice);
+	}
+	
 }

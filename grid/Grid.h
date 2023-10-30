@@ -203,6 +203,8 @@ namespace grid {
 			float* C11_e;
 			float* C12_e;
 			float* C44_e;
+			int* passive;
+			float* DesignVariables_e;
 			int * v2e[8];
 			int* v2vfine[27];
 			int* v2vcoarse[8];
@@ -221,6 +223,7 @@ namespace grid {
 			float* g_sens_C11;
 			float* g_sens_C12;
 			float* g_sens_C44;
+			float* g_sens_DVs;
 
 			/*
 			  |_*_|_*_|_*_| * | * | * | * | * |
@@ -234,6 +237,7 @@ namespace grid {
 			double* Uworst[3];
 			double* Fworst[3];
 			double* U[3];
+			double* Urest[3];
 			double* F[3];
 			double* R[3];
 			double* Fsupport[3];
@@ -347,6 +351,7 @@ namespace grid {
 			grid::BitSAT<unsigned int>& vsatfine, grid::BitSAT<unsigned int>& vsatcoarse,
 			int* v2vcoarse[8]
 		);
+		
 
 		static void setV2VFine_g(int skip, int vresocoarse,
 			grid::BitSAT<unsigned int>& vsatfine, grid::BitSAT<unsigned int>& vsatcoarse,
@@ -394,6 +399,16 @@ namespace grid {
 
 		float* getRho(void) { return _gbuf.rho_e; }
 
+		int* getPassive(void) { return _gbuf.passive; }
+
+		float* getC11(void) { return _gbuf.C11_e; }
+
+		float* getC12(void) { return _gbuf.C12_e; }
+
+		float* getC44(void) { return _gbuf.C44_e; }
+
+		float* getDVs(void) { return _gbuf.DesignVariables_e; }
+
 		float* getSens(void) { return _gbuf.g_sens; }
 
 		float* getSens_C11(void) { return _gbuf.g_sens_C11; }
@@ -402,6 +417,8 @@ namespace grid {
 
 		float* getSens_C44(void) { return _gbuf.g_sens_C44; }
 
+		float* getSens_DVs(void) { return _gbuf.g_sens_DVs; }
+
 		double** getWorstForce(void) { return _gbuf.Fworst; }
 
 		double** getWorstDisplacement(void) { return _gbuf.Uworst; }
@@ -409,6 +426,8 @@ namespace grid {
 		double** getSupportForce(void) { return _gbuf.Fsupport; }
 
 		double** getDisplacement(void) { return _gbuf.U; }
+
+		double** getDisplacementRest(void) { return _gbuf.Urest; }
 
 		double supportForceCh(void);
 
@@ -447,6 +466,8 @@ namespace grid {
 		void resetDirchlet(double* v_dev[3]);
 
 		double compliance(void);
+
+		double distortion(void);
 
 		void update_residual(void);
 
@@ -543,11 +564,15 @@ namespace grid {
 		void v3_pertub(double* v[3], double ratio);
 		void v3_copy(double* vsrc[3], double* vdst[3]);
 		void v3_add(double alpha, double* a[3], double beta, double* b[3]);
+		void v3_Uminus(double* dst[3], float* rho, double* a[3], double* b[3], int* passive);
+		void v3_Uminus0(double* dst[3], float* rho, double* a[3], int* passive);
 		bool v3_hasNaN(double* v[3]);
 		void v3_add(double* a[3], double alpha, double* b[3]);
 		void v3_minus(double* a[3], double alpha, double* b[3]);
 		void v3_minus(double* dst[3], double* a[3], double alpha, double* b[3]);
 		void v3_scale(double* v[3], double ampl);
+		double v3_normUminus0(float* rho, double* a[3], int* passive);
+		double v3_normUminus(float* rho, double* a[3], double* b[3], int* passive);
 		double v3_norm(double* v[3]);
 		double v3_normalize(double* v[3]);
 		double v3_dot(double* v[3], double* u[3]);
@@ -674,6 +699,8 @@ namespace grid {
 		void writeDensity(const std::string& filename);
 
 		void writeDensity2txt(const std::string& filename);
+
+		void setPassive(int problem_i);
 
 		void readDensity(const std::string& filename);
 

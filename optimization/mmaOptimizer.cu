@@ -67,7 +67,7 @@ namespace homo {
 		}
 		type_cast(context->gval.data(), gval, m);
 		double f0val = 1; // doesn't matter
-		double move = 1;
+		double move = 3; //TODO_yyy
 		// optimize
 		cudaPitchedPtr dgdxptr{ (void*)context->dgdx.data(), context->gpitch, n * sizeof(double), m };
 		mmasubDevice(m, n, itn, context->xvar.data(), context->xmin.data(), context->xmax.data(), context->xold1.data(), context->xold2.data(),
@@ -79,7 +79,6 @@ namespace homo {
 
 }
 
-//TODO_yyy
 void hello_extern(void){
 	printf("Hello extern function!\n");
 }

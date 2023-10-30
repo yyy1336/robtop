@@ -30,6 +30,8 @@ CGMesh::Property_map<Vertex_descriptor, Vector3> cgmesh_vnormals;
 CGMesh cmesh;
 
 extern HierarchyGrid grids;
+template<typename T>
+extern void init_array(T* dev_array, T value, int array_size);
 
 static Eigen::SparseMatrix<double> Klast;
 static Eigen::Matrix<double, -1, -1> fullK;
@@ -171,9 +173,9 @@ void grid::HierarchyGrid::log(int itn)
 {
 	char fn[100];
 	if (_logFlag & mask_log_density) {
-		// sprintf_s(fn, "density%04d.vdb", itn);   
-		// printf("-- writing density to %s\n", fn);
-		// writeDensity(getPath(fn));
+		sprintf_s(fn, "density%04d.vdb", itn);   
+		printf("-- writing density to %s\n", fn);
+		writeDensity(getPath(fn));
 		//yyy
 		sprintf_s(fn, "density%04d.txt", itn);
 		printf("-- writing density to %s\n", fn);
@@ -754,6 +756,8 @@ void HierarchyGrid::writeDensity(const std::string& filename)
 
 	auto& esat = elesatlist[0];
     int print = 0;
+	// int maxrhoid = 0;
+	// int maxeid = 0;
 	for (int i = 0; i < esat._bitArray.size(); i++) {
 		int eword = esat._bitArray[i];
 		int eidbase = esat._chunkSat[i];
@@ -765,6 +769,8 @@ void HierarchyGrid::writeDensity(const std::string& filename)
 			int bitpos[3] = { bitid % reso, bitid / reso % reso, bitid / reso / reso };
 			int eid = eidoffset + eidbase;
 			int rhoid = eidmaphost[eid];
+			// if(eid > maxeid) maxeid = eid;
+			// if(rhoid > maxrhoid) maxrhoid = rhoid;
 			for (int k = 0; k < 3; k++){
 				epos[k][eid] = bitpos[k];
 				// printf("%5d", epos[k][eid]);
@@ -794,6 +800,7 @@ void HierarchyGrid::writeDensity(const std::string& filename)
     // for (int i = 0; i < _gridlayer[0]->n_elements; i++) {
     //     printf("pos = (%.5f, %.5f, %.5f) ; rho = %.5f\n", epos[0][i], epos[1,i],epos[2,i],evalue[i]);
     // }
+	// printf("maxeid = %d, maxrhoid = %d\n", maxeid, maxrhoid); //maxeid = 224027, maxrhoid = 224127
 	openvdb_wrapper_t<float>::grid2openVDBfile(filename, epos, evalue);
 }
 
@@ -838,6 +845,7 @@ void HierarchyGrid::writeDensity2txt(const std::string& filename)
 			if (outputFile.is_open()) {
 				// 写入数据到文件
 				outputFile << epos[0][eid] << "," <<epos[1][eid]<< "," <<epos[2][eid]<< "," <<evalue[eid]<< "," <<eid<<std::endl;
+				// outputFile << eid << "," << rhoid << std::endl;
 				// 关闭文件
 				outputFile.close();
 			}
@@ -845,6 +853,74 @@ void HierarchyGrid::writeDensity2txt(const std::string& filename)
 		}
 	}
 	std::cout << "File created and data written successfully." << std::endl;
+}
+
+void HierarchyGrid::setPassive(int problem_i)
+{
+	//参考readDensity()及writeDensity()
+	std::vector<int> eidmaphost(_gridlayer[0]->n_elements);
+	gpu_manager_t::download_buf(eidmaphost.data(), _gridlayer[0]->_gbuf.eidmap, sizeof(int) * _gridlayer[0]->n_elements);
+	// std::vector<float> rhohost(_gridlayer[0]->n_gselements, 0);
+	// gpu_manager_t::download_buf(rhohost.data(), _gridlayer[0]->_gbuf.rho_e, sizeof(float) * _gridlayer[0]->n_gselements);
+	
+	std::vector<int> epos[3];  //element_position,x,y,z
+	for (int i = 0; i < 3; i++) epos[i].resize(_gridlayer[0]->n_elements);
+
+	// std::vector<float> epassive;  //element_value,\rho
+	// epassive.resize(_gridlayer[0]->n_elements);
+	int epassive[_gridlayer[0]->n_gselements] = {int(0)};
+
+	int reso = _gridlayer[0]->_ereso;
+	printf("reso = %d\n", reso); //14767902
+
+	auto& esat = elesatlist[0];
+    int print = 0;
+	for (int i = 0; i < esat._bitArray.size(); i++) {
+		int eword = esat._bitArray[i];
+		int eidbase = esat._chunkSat[i];
+
+		int eidoffset = 0;
+		for (int ji = 0; ji < BitCount<unsigned int>::value; ji++) {
+			if (!read_bit(eword, ji)) continue;
+			int bitid = i * BitCount<unsigned int>::value + ji;
+			int bitpos[3] = { bitid % reso, bitid / reso % reso, bitid / reso / reso };
+			int eid = eidoffset + eidbase;
+			for (int k = 0; k < 3; k++){
+				epos[k][eid] = bitpos[k];
+			}
+			eidoffset++;
+		}
+	}
+	switch (problem_i)
+	{
+	case 1:
+		for (int i = 0; i < esat._bitArray.size(); i++) {
+			init_array(_gridlayer[0]->_gbuf.passive, int(0), _gridlayer[0]->n_gselements);
+			int eword = esat._bitArray[i];
+			int eidbase = esat._chunkSat[i];
+
+			int eidoffset = 0;
+			for (int ji = 0; ji < BitCount<unsigned int>::value; ji++) {
+				int eid = eidoffset + eidbase;
+				int egsid = eidmaphost[eid];
+				float x0 = 64.f;
+				float y0 = 64.f;
+				float z0 = 64.f;
+				float r = 8.f;
+				// printf("eid = %d\n", eid);
+				if(pow((epos[0][eid]-x0),2) + pow((epos[1][eid]-y0),2) + pow((epos[2][eid]-z0),2) < pow(r,2)){
+					epassive[egsid] = 1;
+				}
+				eidoffset++;
+			}
+		}
+		cudaMemcpy(_gridlayer[0]->_gbuf.passive, epassive, sizeof(int) * _gridlayer[0]->n_gselements, cudaMemcpyHostToDevice);
+		// printf("ne = %d\n", _gridlayer[0]->n_elements);
+		break;
+	
+	default:
+		break;
+	}
 }
 
 
@@ -1660,6 +1736,8 @@ size_t grid::Grid::build(
 		_gbuf.U[i] = (double*)gm.add_buf(_name + " U " + std::to_string(i), sizeof(double)* nv_gs); gbuf_size += sizeof(double) * nv_gs;
 		_gbuf.F[i] = (double*)gm.add_buf(_name + " F " + std::to_string(i), sizeof(double)* nv_gs); gbuf_size += sizeof(double) * nv_gs;
 		_gbuf.R[i] = (double*)gm.add_buf(_name + " R " + std::to_string(i), sizeof(double)* nv_gs); gbuf_size += sizeof(double) * nv_gs;
+
+		_gbuf.Urest[i] = (double*)gm.add_buf(_name + " Urest " + std::to_string(i), sizeof(double)* nv_gs); gbuf_size += sizeof(double) * nv_gs;
 		//if (_layer == 0) {
 		//	_gbuf.Uworst[i] = (double*)gm.add_buf(_name + " Uworst " + std::to_string(i), sizeof(double)* nv_gs); gbuf_size += sizeof(double) * nv_gs;
 		//	_gbuf.Fworst[i] = (double*)gm.add_buf(_name + " Fworst " + std::to_string(i), sizeof(double)* nv_gs); gbuf_size += sizeof(double) * nv_gs;
@@ -1673,6 +1751,9 @@ size_t grid::Grid::build(
 		_gbuf.C11_e = (float*)gm.add_buf(_name + "C11_e ", sizeof(float) * ne_gs); gbuf_size += sizeof(float) * ne_gs;
 		_gbuf.C12_e = (float*)gm.add_buf(_name + "C12_e ", sizeof(float) * ne_gs); gbuf_size += sizeof(float) * ne_gs;
 		_gbuf.C44_e = (float*)gm.add_buf(_name + "C44_e ", sizeof(float) * ne_gs); gbuf_size += sizeof(float) * ne_gs;
+		_gbuf.passive = (int*)gm.add_buf(_name + "passive ", sizeof(int) * ne_gs); gbuf_size += sizeof(int) * ne_gs;
+
+		_gbuf.DesignVariables_e = (float*)gm.add_buf(_name + "DesignVariables_e ", sizeof(float) * ne_gs * 4); gbuf_size += sizeof(float) * ne_gs * 4;
 		
 		_gbuf.eActiveBits = (unsigned int*)gm.add_buf(_name + "eActiveBits", sizeof(unsigned int)*ebit._bitArray.size(), ebit._bitArray.data()); gbuf_size += sizeof(unsigned int) * ebit._bitArray.size();
 		_gbuf.eActiveChunkSum = (int*)gm.add_buf(_name + "eActiveChunkSum", sizeof(int)*ebit._chunkSat.size(), ebit._chunkSat.data()); gbuf_size += sizeof(int) * ebit._chunkSat.size();
@@ -1735,6 +1816,7 @@ size_t grid::Grid::build(
 		_gbuf.g_sens_C11 = (float*)gm.add_buf(_name + " g_sens_C11 ", sizeof(float) * ne_gs); gbuf_size += sizeof(float) * ne_gs;
 		_gbuf.g_sens_C12 = (float*)gm.add_buf(_name + " g_sens_C12 ", sizeof(float) * ne_gs); gbuf_size += sizeof(float) * ne_gs;
 		_gbuf.g_sens_C44 = (float*)gm.add_buf(_name + " g_sens_C44 ", sizeof(float) * ne_gs); gbuf_size += sizeof(float) * ne_gs;
+		_gbuf.g_sens_DVs = (float*)gm.add_buf(_name + " g_sens_DVs ", sizeof(float) * ne_gs * 4); gbuf_size += sizeof(float) * ne_gs * 4;
 	}
 
 	// allocate bitflag buffer for vertex and element
@@ -2076,6 +2158,37 @@ double Grid::compliance(void)
 	return v3_dot(_gbuf.F, _gbuf.U);
 }
 
+double Grid::distortion(void)
+{
+	//return v3_norm(_gbuf.U);  //trial1，对
+	// return v3_norm(_gbuf.Urest); //trial2，对
+	// // trial3,对
+	// v3_minus(_gbuf.Urest, 1, _gbuf.U);
+	// return v3_norm(_gbuf.Urest);
+	// // trial4,对
+	// //  怎么第二天又不对了  ： -- NaN step occurred!  神秘
+	// double* Udiff[3];
+	// Grid::getTempBufArray(Udiff, 3, n_gsvertices);    
+	// v3_minus(Udiff, _gbuf.Urest, 1, _gbuf.U);
+	// return v3_norm(Udiff);
+	// // trial5见v3_Uminus
+
+	// double* Udiff[3];
+	// Grid::getTempBufArray(Udiff, 3, n_gsvertices);
+	// v3_Uminus(Udiff, _gbuf.rho_e, _gbuf.U, _gbuf.Urest, _gbuf.passive);
+	// // return v3_norm(Udiff);
+	// double absolute_distortion = v3_norm(Udiff);
+	// double* U0[3];
+	// Grid::getTempBufArray(U0, 3, n_gsvertices);
+	// v3_Uminus0(U0, _gbuf.rho_e, _gbuf.Urest, _gbuf.passive);
+	// printf("v3_norm(U0) = %f\n", v3_norm(U0));
+	// return absolute_distortion;
+	// return absolute_distortion/v3_norm(U0);
+	
+	double absolute_distortion = v3_normUminus(_gbuf.rho_e, _gbuf.U, _gbuf.Urest, _gbuf.passive);
+	return absolute_distortion/v3_normUminus0(_gbuf.rho_e, _gbuf.Urest, _gbuf.passive);
+}
+
 void Grid::solve_fem_host(void)
 {
 	static Eigen::BiCGSTAB<Eigen::SparseMatrix<double>, Eigen::IncompleteLUT<double>> solverhost;
@@ -2213,12 +2326,12 @@ void HierarchyGrid::update_stencil(void)
 		if (i == 0) continue;
 		// printf("\n\033[33m-- gridlayer%d --\n\033[0m", i);
 		restrict_stencil(*_gridlayer[i], *_gridlayer[i]->fineGrid, cloak);
-		printf("restrict_stencil Done.\n");
+		// printf("restrict_stencil Done.\n");
 		// printf("-- c1 = %6.4e\n", grids[0]->compliance());
 		// last layer build host system
 		if (i == _gridlayer.size() - 1) {
 			_gridlayer[i]->buildCoarsestSystem();
-			printf("buildCoarsestSystem Done.\n");
+			// printf("buildCoarsestSystem Done.\n");
 		}
 		// printf("-- c2 = %6.4e\n", grids[0]->compliance());
 	}
